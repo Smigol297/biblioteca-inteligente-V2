@@ -1,0 +1,9 @@
+[flake8]
+max-line-length = 120
+# black corta a 100; flake8 tolera hasta 120 para comentarios y strings que black no puede partir
+# E203 y W503 chocan con black
+extend-ignore = E203, W503
+exclude = .git,.venv,dist,build,mis_pdfs,__pycache__
+per-file-ignores =
+    # servidor.py lleva todo el HTML/JS en un string: las lineas largas son esperables
+    servidor.py: E501

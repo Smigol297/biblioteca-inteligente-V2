@@ -1,0 +1,12 @@
+# Versiones fijadas: son las últimas que tienen wheels i686 para Python 3.6 (Ubuntu 18.04)
+numpy==1.19.5
+scipy==1.5.4
+scikit-learn==0.24.2
+pyinstaller==4.10
+flask
+translate
+python-docx==0.8.11
+importlib_metadata
+pypdf==3.17.4
+typing_extensions==4.1.1
+segno

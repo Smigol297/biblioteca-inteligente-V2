@@ -1,0 +1,21 @@
+[tool.black]
+line-length = 100
+extend-exclude = '/(\.venv|dist|build|mis_pdfs)/'
+
+[tool.isort]
+profile = "black"
+line_length = 100
+known_first_party = [
+    "buscador_service",
+    "config",
+    "database",
+    "indexador",
+    "indexador_service",
+    "servidor",
+]
+skip = [".venv", "dist", "build", "mis_pdfs"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = "-ra"

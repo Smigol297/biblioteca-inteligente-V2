@@ -1,0 +1,16 @@
+BIBLIOTECA INTELIGENTE - macOS
+
+1) Descomprimí este ZIP en una carpeta propia (por ejemplo en Documentos).
+
+2) La primera vez, macOS bloquea programas sin firmar. Abrí la app Terminal y ejecutá
+   (reemplazá la ruta por la tuya; podés arrastrar la carpeta a la Terminal):
+
+       xattr -dr com.apple.quarantine /ruta/a/Biblioteca
+
+3) Hacé doble click en "Iniciar.command". Se abre una ventana de Terminal y, en unos
+   segundos, el navegador. Cerrar esa ventana apaga el programa.
+
+Si macOS sigue bloqueándolo: Ajustes del Sistema > Privacidad y seguridad > "Abrir igualmente".
+
+Tus libros y la base de datos se guardan dentro de la carpeta "biblioteca".
+Si actualizás a una versión nueva, copiá encima sin borrar "mis_pdfs" ni "biblioteca.db".

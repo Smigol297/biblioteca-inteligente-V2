@@ -1,0 +1,98 @@
+name: Compilar Biblioteca
+
+on:
+  workflow_dispatch:        # botón "Run workflow" en la pestaña Actions
+  push:
+    tags: ["v*"]            # al subir una etiqueta v1.0, v1.1... también publica un Release
+
+permissions:
+  contents: write           # necesario para adjuntar archivos al Release
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false      # si una plataforma falla, las otras siguen
+      matrix:
+        include:
+          - name: windows-x64
+            os: windows-latest
+            python: "3.9"
+          - name: macos-apple-silicon
+            os: macos-14
+            python: "3.11"
+          - name: macos-intel
+            os: macos-15-intel   # si GitHub cambia el nombre, ver docs de "runner images"
+            python: "3.11"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Instalar dependencias
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-windows.txt
+
+      - name: Compilar
+        shell: bash
+        run: |
+          python -m PyInstaller --onedir --noconfirm --noupx --name biblioteca \
+            --collect-submodules sklearn --collect-submodules scipy --collect-data docx \
+            --exclude-module matplotlib --exclude-module tkinter \
+            --collect-submodules segno \
+            servidor.py
+
+      - name: Prueba de humo (arrancar, subir un texto y buscarlo)
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then BIN=dist/biblioteca/biblioteca.exe; else BIN=dist/biblioteca/biblioteca; fi
+          "$BIN" > salida.log 2>&1 &
+          PID=$!
+          OK=0
+          for i in $(seq 1 60); do
+            if curl -sf http://127.0.0.1:5000/ > /dev/null; then OK=1; break; fi
+            sleep 2
+          done
+          if [ "$OK" != "1" ]; then echo "El servidor no arrancó:"; cat salida.log; exit 1; fi
+          echo "Texto de prueba sobre aprendizaje automatico y redes neuronales en bibliotecas digitales" > prueba.txt
+          curl -sf -F "file=@prueba.txt" http://127.0.0.1:5000/subir | grep -E '"exito": ?true' || { cat salida.log; exit 1; }
+          curl -sf "http://127.0.0.1:5000/buscar?q=aprendizaje" | grep -q "prueba.txt" || { cat salida.log; exit 1; }
+          curl -sf -F "file=@prueba.txt" -F "coleccion=pruebas" http://127.0.0.1:5000/subir | grep -E '"exito": ?true' || { cat salida.log; exit 1; }
+          curl -sf "http://127.0.0.1:5000/buscar?q=aprendizaje&coleccion=pruebas" | grep -q "pruebas/prueba.txt" || { cat salida.log; exit 1; }
+          curl -sf http://127.0.0.1:5000/qr.svg | grep -q "<svg" || { cat salida.log; exit 1; }
+          echo "Prueba de humo OK"
+          kill $PID 2>/dev/null || true
+          if [ "$RUNNER_OS" = "Windows" ]; then taskkill //F //IM biblioteca.exe || true; fi
+          sleep 3
+          rm -rf dist/biblioteca/biblioteca.db dist/biblioteca/mis_pdfs || true
+
+      - name: Empaquetar (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p paquete/Biblioteca
+          cp -R dist/biblioteca paquete/Biblioteca/biblioteca
+          cp packaging/Iniciar.command packaging/LEEME-mac.txt paquete/Biblioteca/
+          chmod +x paquete/Biblioteca/Iniciar.command paquete/Biblioteca/biblioteca/biblioteca
+          ditto -c -k --keepParent paquete/Biblioteca Biblioteca-${{ matrix.name }}.zip
+
+      - name: Empaquetar (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Compress-Archive -Path dist/biblioteca -DestinationPath Biblioteca-${{ matrix.name }}.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Biblioteca-${{ matrix.name }}
+          path: Biblioteca-${{ matrix.name }}.zip
+
+      - name: Adjuntar al Release (solo con etiqueta v*)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: Biblioteca-${{ matrix.name }}.zip

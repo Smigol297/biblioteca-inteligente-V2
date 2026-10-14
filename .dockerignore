@@ -1,0 +1,6 @@
+dist
+mis_pdfs
+*.db
+__pycache__
+.git
+docs
