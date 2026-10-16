@@ -1,8 +1,6 @@
-import buscador_service
-from buscador_service import BuscadorLocal
-
-# Se guarda el metodo real antes de que el fixture autouse lo reemplace
-_TRADUCIR_REAL = BuscadorLocal._traducir_consulta
+# -*- coding: utf-8 -*-
+"""Tests del BuscadorHibrido (BM25 + e5-small + RRF)."""
+from buscador_service import BuscadorHibrido
 
 LIBROS = {
     "biologia.txt": [
@@ -19,12 +17,18 @@ LIBROS = {
 }
 
 
+# ---------- entrenamiento ----------
+
+
 def test_entrenar_sin_datos_devuelve_false(entorno):
-    assert BuscadorLocal().entrenar_modelo() is False
+    assert BuscadorHibrido().entrenar_modelo() is False
 
 
 def test_buscar_sin_entrenar_devuelve_lista_vacia(entorno):
-    assert BuscadorLocal().buscar("hola") == []
+    assert BuscadorHibrido().buscar("hola") == []
+
+
+# ---------- busqueda basica ----------
 
 
 def test_encuentra_la_pagina_correcta(crear_buscador):
@@ -62,6 +66,9 @@ def test_agrupar_deja_una_pagina_por_libro(crear_buscador):
     assert agrupado.count("biologia.txt") == 1
 
 
+# ---------- colecciones ----------
+
+
 def test_filtro_por_coleccion(crear_buscador):
     texto = ["El elefante africano es el animal terrestre mas grande del planeta"]
     buscador = crear_buscador(
@@ -81,6 +88,9 @@ def test_filtro_por_coleccion(crear_buscador):
     assert buscador.buscar("elefante", coleccion="inexistente") == []
 
 
+# ---------- terminos resaltables ----------
+
+
 def test_terminos_resaltables_descarta_palabras_comunes(crear_buscador):
     buscador = crear_buscador(
         {
@@ -95,35 +105,70 @@ def test_terminos_resaltables_descarta_palabras_comunes(crear_buscador):
     assert buscador._terminos_resaltables("de la") == {"de", "la"}
 
 
-class _TraductorFalso:
-    def __init__(self, from_lang, to_lang):
-        pass
-
-    def translate(self, texto):
-        return "cat"
+# ---------- RRF: fusion de los dos rankings ----------
 
 
-def test_traducir_concatena_ambos_idiomas(monkeypatch):
-    monkeypatch.setattr(BuscadorLocal, "_traducir_consulta", _TRADUCIR_REAL)
-    monkeypatch.setattr(buscador_service, "Translator", _TraductorFalso)
-    assert BuscadorLocal()._traducir_consulta("gato") == "gato cat"
+def test_rrf_fusiona_bm25_y_denso(crear_buscador, monkeypatch):
+    """Con un fake que favorece textos con 'semantico' y BM25 favoreciendo
+    'algoritmo', los dos documentos tienen que aparecer en el resultado.
+
+    Sin RRF, uno de los dos quedaria afuera segun quien ganara la pelea.
+    """
+    import numpy as np
+
+    import buscador_service
+
+    class _Semantico:
+        DIM = 384
+
+        def __init__(self, *a, **kw):
+            pass
+
+        def embed(self, textos):
+            for t in textos:
+                v = np.zeros(self.DIM, dtype=np.float32)
+                if "semantico" in t.lower():
+                    v[0] = 1.0
+                else:
+                    v[1] = 1.0
+                yield v
+
+    monkeypatch.setattr(buscador_service, "TextEmbedding", _Semantico)
+
+    buscador = crear_buscador(
+        {
+            "lexico.txt": ["algoritmo algoritmo algoritmo algoritmo aparece aqui"],
+            "semantico.txt": ["una palabra semantico nada mas"],
+            "ruido.txt": ["cocina recetas torta de chocolate"],
+        }
+    )
+    resultados = buscador.buscar("algoritmo semantico")
+    nombres = [r["archivo"] for r in resultados]
+
+    # lexico gana en BM25 (4 apariciones de 'algoritmo'),
+    # semantico gana en densa (el fake pone coseno 1 con la consulta).
+    # Ambos deben sobrevivir al umbral y aparecer.
+    assert "lexico.txt" in nombres
+    assert "semantico.txt" in nombres
+    # ruido no comparte nada con la consulta en ningun ranking.
+    assert "ruido.txt" not in nombres
 
 
-def test_traducir_igual_a_la_consulta_no_duplica(monkeypatch):
-    class _Igual(_TraductorFalso):
-        def translate(self, texto):
-            return texto.upper()
-
-    monkeypatch.setattr(BuscadorLocal, "_traducir_consulta", _TRADUCIR_REAL)
-    monkeypatch.setattr(buscador_service, "Translator", _Igual)
-    assert BuscadorLocal()._traducir_consulta("hotel") == "hotel"
+# ---------- prefijos de e5 ----------
 
 
-def test_traducir_sin_internet_devuelve_la_consulta(monkeypatch):
-    class _SinRed(_TraductorFalso):
-        def translate(self, texto):
-            raise ConnectionError("sin red")
+def test_prefijos_query_y_passage(crear_buscador, fake_embedding):
+    """e5 requiere 'passage: ' en los documentos y 'query: ' en la consulta.
+    Omitirlos degrada el recall.
+    """
+    fake_embedding.textos_recibidos = []
+    buscador = crear_buscador(LIBROS)
 
-    monkeypatch.setattr(BuscadorLocal, "_traducir_consulta", _TRADUCIR_REAL)
-    monkeypatch.setattr(buscador_service, "Translator", _SinRed)
-    assert BuscadorLocal()._traducir_consulta("gato") == "gato"
+    # Durante el entrenamiento, todos los textos van con 'passage: '.
+    assert fake_embedding.textos_recibidos
+    assert all(t.startswith("passage: ") for t in fake_embedding.textos_recibidos)
+
+    # Durante la busqueda, la consulta va con 'query: '.
+    fake_embedding.textos_recibidos = []
+    buscador.buscar("fotosintesis")
+    assert fake_embedding.textos_recibidos == ["query: fotosintesis"]

@@ -43,7 +43,10 @@ jobs:
         shell: bash
         run: |
           python -m PyInstaller --onedir --noconfirm --noupx --name biblioteca \
-            --collect-submodules sklearn --collect-submodules scipy --collect-data docx \
+            --collect-all fastembed \
+            --collect-all onnxruntime \
+            --collect-submodules rank_bm25 \
+            --collect-data docx \
             --exclude-module matplotlib --exclude-module tkinter \
             --collect-submodules segno \
             servidor.py

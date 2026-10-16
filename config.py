@@ -11,9 +11,22 @@ else:
 CARPETA_PDFS = os.path.join(BASE_DIR, "mis_pdfs")
 DB_PATH = os.path.join(BASE_DIR, "biblioteca.db")
 
+
+# Carpeta de modelos ONNX. Si el ejecutable fue empaquetado con el modelo
+# bundleado, apunta adentro del bundle; si no, a BASE_DIR/model_cache.
+def _modelos_dir():
+    if getattr(sys, "frozen", False):
+        base = getattr(sys, "_MEIPASS", os.path.dirname(sys.executable))
+        return os.path.join(base, "model_cache")
+    return os.path.join(BASE_DIR, "model_cache")
+
+
+MODELOS_DIR = _modelos_dir()
+
 # Asegurar que las carpetas existan al iniciar
 if not os.path.exists(CARPETA_PDFS):
     os.makedirs(CARPETA_PDFS)
+    os.makedirs(MODELOS_DIR, exist_ok=True)
 
 
 def cargar_env():

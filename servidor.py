@@ -1,6 +1,7 @@
 import io
 import os
 import socket
+import sys
 import threading
 import webbrowser
 
@@ -8,20 +9,37 @@ from flask import Flask, Response, jsonify, request, send_from_directory
 
 import config
 import database
-from buscador_service import BuscadorLocal
+from buscador_service import BuscadorHibrido
 from indexador_service import procesar_un_archivo
 
 try:
     import segno  # QR en Python puro; si no está instalada, la página funciona sin QR
 except ImportError:
     segno = None
+
+# Windows: si stdout/stderr van redirigidos a un archivo, Python usa cp1252 y
+# un print con tildes (ej. "página ilegible" en indexador_service.leer_pdf)
+# puede tirar UnicodeEncodeError. En Python 3.6 no existe reconfigure; el
+# except lo ignora y sigue andando como antes.
+for _flujo in (sys.stdout, sys.stderr):
+    try:
+        _flujo.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
+# --monitor: corre el benchmark y sale, sin tocar la base real ni arrancar Flask.
+if "--monitor" in sys.argv:
+    import monitor
+
+    sys.exit(monitor.main())
+
 app = Flask(__name__)
 
 # Inicializar Base de datos al arrancar
 database.inicializar_db()
 
 # Inicializar y entrenar el buscador al levantar el servidor
-buscador = BuscadorLocal()
+buscador = BuscadorHibrido()
 print("Entrenando motor de busqueda local...")
 buscador.entrenar_modelo()
 

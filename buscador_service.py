@@ -1,158 +1,301 @@
+# -*- coding: utf-8 -*-
+"""Buscador hibrido: BM25 (lexico) + multilingual-e5-small (semantico) con RRF.
+
+Reemplaza al BuscadorLocal basado en TF-IDF. Sin traduccion (e5 es multilingue)
+y sin dependencia de internet en tiempo de busqueda.
+"""
+import hashlib
+import os
 import re
-from bisect import bisect_left
 
 import numpy as np
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
-from translate import Translator
+from fastembed import TextEmbedding
+from fastembed.common.model_description import ModelSource, PoolingType
+from rank_bm25 import BM25Okapi
 
+# --- Registro manual de e5-small (no está en el catálogo de esta versión) ---
+# fastembed 0.9.0 solo incluye multilingual-e5-large. Registramos el small
+# explícitamente para que TextEmbedding lo reconozca.
+# Ver: https://github.com/qdrant/fastembed/issues/123
+try:
+    TextEmbedding.add_custom_model(
+        model="intfloat/multilingual-e5-small",
+        pooling=PoolingType.MEAN,
+        normalization=True,
+        sources=ModelSource(hf="intfloat/multilingual-e5-small"),
+        dim=384,
+        model_file="onnx/model.onnx",
+    )
+    print("Modelo e5-small registrado manualmente.")
+except Exception as e:
+    print("Aviso: no se pudo registrar e5-small: %s" % e)
+# ---------------------------------------------------------------------------
+
+import config
 import database
+
+# ---------------------------------------------------------------------------
+# Constantes
+# ---------------------------------------------------------------------------
+
+MODELO_EMBEDDINGS = "intfloat/multilingual-e5-small"
+RRF_K = 60
+UMBRAL_REL = 0.3
+UMBRAL_DENSO_MIN = 0.4  # coseno minimo para considerar que hay match semantico
+ANCHO_FRAGMENTO = 300
+TOKEN_RE = re.compile(r"\w\w+")
+PREFIJO_PASSAGE = "passage: "
+PREFIJO_QUERY = "query: "
+
+
+# ---------------------------------------------------------------------------
+# Helpers (fragmento, coleccion)
+# ---------------------------------------------------------------------------
 
 
 def _coleccion_de(archivo):
-    """La colección es la carpeta: 'recetas/torta.pdf' -> 'recetas'. Sin carpeta -> ''."""
-    return archivo.split("/")[0] if "/" in archivo else ""
+    if "/" in archivo:
+        return archivo.split("/", 1)[0]
+    return ""
 
 
-def _fragmento(texto, terminos, ancho=300):
-    """Devuelve [[trozo, resaltado], ...]: la ventana de ~ancho caracteres con más términos distintos."""
-    spans = []
-    if terminos:
-        alternativa = "|".join(re.escape(t) for t in sorted(terminos, key=len, reverse=True))
-        patron = re.compile(r"\b(?:" + alternativa + r")\b", re.IGNORECASE)
-        for m in patron.finditer(texto):
-            spans.append((m.start(), m.end(), m.group(0).lower()))
+def _fragmento(texto, terminos, ancho=ANCHO_FRAGMENTO):
+    """Ventana de ~ancho caracteres centrada en los terminos. Lista [trozo, resaltado]."""
+    if not terminos:
+        trozo = texto[:ancho]
+        if len(texto) > ancho:
+            trozo = trozo.rsplit(" ", 1)[0] + " …"
+        return [[trozo, 0]]
 
-    if not spans:
-        corte = texto[:ancho]
-        return [[corte + ("…" if len(texto) > ancho else ""), 0]]
+    apariciones = []
+    for t in terminos:
+        for m in re.finditer(r"\b" + re.escape(t) + r"\b", texto, re.IGNORECASE):
+            apariciones.append((m.start(), t))
+            if len(apariciones) >= 50:
+                break
+        if len(apariciones) >= 50:
+            break
 
-    # Elegir el comienzo de ventana que encierre más términos distintos (y después más apariciones)
-    starts = [s[0] for s in spans]
-    mejor_ini, mejor_pun = 0, (-1, -1)
-    for s_ini, _, _ in spans[:50]:
-        ini = max(0, s_ini - 60)
-        j = bisect_left(starts, ini)
-        dentro = []
-        while j < len(spans) and spans[j][0] < ini + ancho:
-            if spans[j][1] <= ini + ancho:
-                dentro.append(spans[j])
-            j += 1
-        pun = (len(set(s[2] for s in dentro)), len(dentro))
-        if pun > mejor_pun:
-            mejor_ini, mejor_pun = ini, pun
+    if not apariciones:
+        trozo = texto[:ancho]
+        if len(texto) > ancho:
+            trozo = trozo.rsplit(" ", 1)[0] + " …"
+        return [[trozo, 0]]
 
-    # Ajustar los bordes a límites de palabra
-    ini = mejor_ini
+    mejor_ini, mejor_fin, mejor_score = 0, min(len(texto), ancho), (-1, -1)
+    for pos, _ in apariciones:
+        ini = max(0, pos - ancho // 2)
+        fin = min(len(texto), ini + ancho)
+        if fin - ini < ancho:
+            ini = max(0, fin - ancho)
+        distintos, total = set(), 0
+        for p, t in apariciones:
+            if ini <= p < fin:
+                distintos.add(t)
+                total += 1
+        score = (len(distintos), total)
+        if score > mejor_score:
+            mejor_score = score
+            mejor_ini, mejor_fin = ini, fin
+
+    ini, fin = mejor_ini, mejor_fin
     if ini > 0:
-        sp = texto.find(" ", ini, ini + 20)
-        if sp != -1:
-            ini = sp + 1
-    fin = min(len(texto), mejor_ini + ancho)
+        esp = texto.rfind(" ", 0, ini + 1)
+        if esp != -1:
+            ini = esp + 1
     if fin < len(texto):
-        sp = texto.rfind(" ", max(ini, fin - 20), fin)
-        if sp != -1:
-            fin = sp
+        esp = texto.find(" ", fin)
+        if esp != -1:
+            fin = esp
+
+    prefijo = "… " if ini > 0 else ""
+    sufijo = " …" if fin < len(texto) else ""
+    recorte = texto[ini:fin]
 
     trozos = []
-    pos = ini
-    for s_ini, s_fin, _ in spans:
-        if s_ini < pos or s_fin > fin:
-            continue
-        if s_ini > pos:
-            trozos.append([texto[pos:s_ini], 0])
-        trozos.append([texto[s_ini:s_fin], 1])
-        pos = s_fin
-    if pos < fin:
-        trozos.append([texto[pos:fin], 0])
-    if ini > 0:
-        trozos.insert(0, ["… ", 0])
-    if fin < len(texto):
-        trozos.append([" …", 0])
+    if prefijo:
+        trozos.append([prefijo, 0])
+    pos = 0
+    patron = r"\b(" + "|".join(re.escape(t) for t in terminos) + r")\b"
+    for m in re.finditer(patron, recorte, re.IGNORECASE):
+        if m.start() > pos:
+            trozos.append([recorte[pos : m.start()], 0])
+        trozos.append([m.group(0), 1])
+        pos = m.end()
+    if pos < len(recorte):
+        trozos.append([recorte[pos:], 0])
+    if sufijo:
+        trozos.append([sufijo, 0])
     return trozos
 
 
-class BuscadorLocal:
+# ---------------------------------------------------------------------------
+# Buscador hibrido
+# ---------------------------------------------------------------------------
+
+
+class BuscadorHibrido:
+    """BM25 + e5-small, fusionados con RRF. Interfaz compatible con BuscadorLocal."""
+
     def __init__(self):
-        self.vectorizer = TfidfVectorizer(lowercase=True)
-        self.matrix_tfidf = None
-        self.paginas_data = []
-        self.colecciones = None
+        self.paginas = []
+        self.colecciones = np.array([])
+        self.bm25 = None
+        self.embeddings = None
+        self.modelo = None
+        self._entrenado = False
+        self.corpus_tokens = []
+
+    # -- entrenamiento ------------------------------------------------------
 
     def entrenar_modelo(self):
-        """Carga los datos desde el disco y entrena el motor matemático local."""
         filas = database.obtener_todas_las_paginas()
         if not filas:
+            self._entrenado = False
             return False
 
-        self.paginas_data = filas
-        self.colecciones = np.array([_coleccion_de(r[1]) for r in filas])
-        textos = [r[3] for r in filas]
+        self.paginas = [(f[1], f[2], f[3]) for f in filas]
+        self.colecciones = np.array([_coleccion_de(a) for a, _, _ in self.paginas])
 
-        self.matrix_tfidf = self.vectorizer.fit_transform(textos)
+        # BM25: tokenizacion simple. Guardamos el corpus tokenizado nosotros
+        # porque BM25Okapi no lo expone como atributo publico.
+        self.corpus_tokens = [t.lower().split() for _, _, t in self.paginas]
+        self.bm25 = BM25Okapi(self.corpus_tokens)
+
+        # El modelo se carga siempre: buscar() lo necesita para embeber la
+        # consulta, aunque los embeddings del corpus se reusen del .npy.
+        if self.modelo is None:
+            self.modelo = TextEmbedding(
+                model_name=MODELO_EMBEDDINGS,
+                cache_dir=config.MODELOS_DIR,
+            )
+
+        # Embeddings: reusar si el corpus no cambio
+        ruta_emb = os.path.join(config.BASE_DIR, "embeddings.npy")
+        hash_actual = self._hash_corpus()
+        if os.path.exists(ruta_emb):
+            try:
+                datos = np.load(ruta_emb, allow_pickle=True).item()
+                if datos.get("hash") == hash_actual and datos["emb"].shape[0] == len(self.paginas):
+                    self.embeddings = datos["emb"]
+                    self._entrenado = True
+                    return True
+            except Exception:
+                pass
+
+        # e5 requiere "passage: " para los documentos
+        textos = [PREFIJO_PASSAGE + t for _, _, t in self.paginas]
+        self.embeddings = np.array(list(self.modelo.embed(textos)), dtype=np.float32)
+        # Normalizar para que el producto punto sea coseno
+        normas = np.linalg.norm(self.embeddings, axis=1, keepdims=True)
+        normas[normas == 0] = 1.0
+        self.embeddings = self.embeddings / normas
+        np.save(ruta_emb, {"hash": hash_actual, "emb": self.embeddings})
+        self._entrenado = True
         return True
 
-    def _traducir_consulta(self, query):
-        """Intenta traducir la consulta del español al inglés de forma segura."""
-        try:
-            translator = Translator(from_lang="es", to_lang="en")
-            traduccion = translator.translate(query)
-            if traduccion and traduccion.lower() != query.lower():
-                return f"{query} {traduccion}"
-        except Exception as e:
-            print(f"Error en traducción: {e}")
-        return query
+    def _hash_corpus(self):
+        h = hashlib.md5()
+        for a, p, t in self.paginas:
+            h.update(("%s|%s|%s" % (a, p, t)).encode("utf-8", errors="replace"))
+        return h.hexdigest()
 
-    def _terminos_resaltables(self, query_expandida):
-        """Palabras de la consulta (es + en) que vale la pena resaltar.
-        Se descartan las muy comunes ('de', 'el') para no resaltar todo."""
-        vocab = self.vectorizer.vocabulary_
-        idf = self.vectorizer.idf_
-        terminos = set(re.findall(r"\w\w+", query_expandida.lower()))
-        raros = set(t for t in terminos if t in vocab and idf[vocab[t]] > 1.7)
-        return raros or set(t for t in terminos if t in vocab)
+    # -- busqueda -----------------------------------------------------------
 
-    def buscar(
-        self, query, top_k=100, umbral_abs=0.03, umbral_rel=0.3, agrupar=False, coleccion=None
-    ):
-        """Búsqueda bilingüe: devuelve solo coincidencias fuertes.
-        agrupar=True deja solo la mejor página de cada libro."""
-        if self.matrix_tfidf is None:
+    def buscar(self, query, top_k=100, agrupar=False, coleccion=None, umbral_rel=None):
+        if not self._entrenado or not query.strip():
             return []
 
-        query_expandida = self._traducir_consulta(query)
-        print(f" Buscando: {query_expandida}")
+        # BM25
+        tokens = query.lower().split()
+        scores_bm25 = np.array(self.bm25.get_scores(tokens))
+        # Mascara de overlap: docs que comparten al menos un token con la consulta.
+        # No alcanza con "score > 0" porque con terminos frecuentes el IDF de
+        # BM25 es negativo y un doc relevante termina con score negativo.
+        tokens_set = set(tokens)
+        mask_bm25 = np.array([bool(tokens_set & set(doc)) for doc in self.corpus_tokens])
 
-        vector_pregunta = self.vectorizer.transform([query_expandida])
-        similitudes = cosine_similarity(self.matrix_tfidf, vector_pregunta).flatten()
-        if coleccion is not None:  # None = todas; '' = solo los que no tienen colección
-            similitudes = np.where(self.colecciones == coleccion, similitudes, 0.0)
-        mejor = similitudes.max()
-        if mejor <= 0:
+        # e5 requiere "query: " para la consulta
+        if self.modelo is None:
+            self.modelo = TextEmbedding(
+                model_name=MODELO_EMBEDDINGS,
+                cache_dir=config.MODELOS_DIR,
+            )
+        q_emb = np.array(list(self.modelo.embed([PREFIJO_QUERY + query])), dtype=np.float32)[0]
+        q_emb = q_emb / (np.linalg.norm(q_emb) or 1.0)
+        scores_denso = self.embeddings @ q_emb
+
+        # Filtro por coleccion
+        if coleccion is not None:
+            mascara = self.colecciones == ("" if coleccion == "" else coleccion)
+            scores_bm25 = np.where(mascara, scores_bm25, -np.inf)
+            scores_denso = np.where(mascara, scores_denso, -np.inf)
+            mask_bm25 = mask_bm25 & mascara
+
+        # Rankings
+        idx_bm25 = np.argsort(-scores_bm25)
+        idx_denso = np.argsort(-scores_denso)
+
+        # RRF: entra al ranking quien tenga match lexico (mask_bm25) o semantico
+        # (coseno >= UMBRAL_DENSO_MIN).
+        rrf = {}
+        for rank, idx in enumerate(idx_bm25, start=1):
+            if mask_bm25[idx]:
+                rrf[int(idx)] = rrf.get(int(idx), 0.0) + 1.0 / (RRF_K + rank)
+        for rank, idx in enumerate(idx_denso, start=1):
+            if scores_denso[idx] >= UMBRAL_DENSO_MIN:
+                rrf[int(idx)] = rrf.get(int(idx), 0.0) + 1.0 / (RRF_K + rank)
+
+        if not rrf:
             return []
-        minimo = max(umbral_abs, mejor * umbral_rel)
-        terminos = self._terminos_resaltables(query_expandida)
+
+        mejor = max(rrf.values())
+        _umbral_rel = UMBRAL_REL if umbral_rel is None else umbral_rel
+        umbral = mejor * _umbral_rel
+        candidatos = sorted(rrf.items(), key=lambda kv: -kv[1])
+        terminos = self._terminos_resaltables(query)
 
         resultados = []
         vistos = set()
-        for idx in np.argsort(similitudes)[::-1]:
-            if similitudes[idx] < minimo:
-                break  # están ordenados: los siguientes son todavía peores
-            id_db, archivo, pagina, texto = self.paginas_data[idx]
+        for idx, score in candidatos:
+            if score < umbral:
+                continue
+            archivo, pagina, texto = self.paginas[idx]
             if agrupar:
                 if archivo in vistos:
-                    continue  # ya tenemos la mejor página de este libro
+                    continue
                 vistos.add(archivo)
-            fragmento = _fragmento(texto, terminos)
+            frag = _fragmento(texto, terminos)
             resultados.append(
                 {
                     "archivo": archivo,
-                    "pagina": int(pagina),
-                    "texto": "".join(t for t, _ in fragmento),
-                    "fragmento": fragmento,
-                    "score": round(float(similitudes[idx]), 3),
+                    "pagina": pagina,
+                    "texto": "".join(t for t, _ in frag),
+                    "fragmento": frag,
+                    "score": float(score),
                 }
             )
             if len(resultados) >= top_k:
                 break
         return resultados
+
+    def _terminos_resaltables(self, query):
+        """Tokens de la consulta que existen en el corpus y no son ubicuos.
+
+        Antes se filtraba por idf > 1.7; ahora se filtra por frecuencia de
+        documento: un termino que aparece en mas del 60% de las paginas es
+        demasiado comun para resaltarlo. Si todos son comunes, se usan
+        igual (mejor eso que no resaltar nada).
+        """
+        if self.bm25 is None:
+            return set()
+        tokens = TOKEN_RE.findall(query.lower())
+        n_docs = len(self.corpus_tokens)
+        if n_docs == 0:
+            return set(tokens)
+        vocab_filtrado = set()
+        for t in tokens:
+            apariciones = sum(1 for doc in self.corpus_tokens if t in doc)
+            if apariciones > 0 and apariciones / float(n_docs) < 0.6:
+                vocab_filtrado.add(t)
+        return vocab_filtrado or set(tokens)

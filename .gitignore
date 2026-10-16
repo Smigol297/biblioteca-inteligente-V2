@@ -9,3 +9,8 @@ mis_pdfs/
 *.lock
 docs/
 *.png
+.obsidian/
+.vscode/
+embeddings.npy
+docker/model_cache/
+model_cache/
