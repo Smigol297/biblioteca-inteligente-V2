@@ -55,7 +55,9 @@ class _FakeEmbedding:
         # Ignoramos model_name, cache_dir y demas: al fake le da igual.
         pass
 
-    def embed(self, textos):
+    def embed(self, textos, batch_size=None, **kwargs):
+        # batch_size y kwargs se ignoran a propósito: el fake produce lo mismo
+        # sin importar cómo se trocee la entrada.
         for t in textos:
             _FakeEmbedding.textos_recibidos.append(t)
             v = np.zeros(self.DIM, dtype=np.float32)

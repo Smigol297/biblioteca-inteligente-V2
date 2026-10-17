@@ -124,7 +124,9 @@ def test_rrf_fusiona_bm25_y_denso(crear_buscador, monkeypatch):
         def __init__(self, *a, **kw):
             pass
 
-        def embed(self, textos):
+        def embed(self, textos, batch_size=None, **kwargs):
+            # batch_size y kwargs se ignoran: el fake produce lo mismo
+            # sin importar cómo se trocee la entrada.
             for t in textos:
                 v = np.zeros(self.DIM, dtype=np.float32)
                 if "semantico" in t.lower():

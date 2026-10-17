@@ -383,6 +383,7 @@ def _imprimir(r, n_consultas):
     print("  carga DB        : %.3f s" % r["arranque"]["carga_db_s"])
     print("  BM25            : %.3f s" % r["arranque"]["bm25_s"])
     print("  embeddings      : %.3f s" % r["arranque"]["embeddings_s"])
+    print("  carga modelo    : %.3f s" % r["arranque"]["carga_modelo_s"])
     print("  TOTAL           : %.3f s" % r["arranque"]["total_s"])
     print()
     print("BUSQUEDA  (%d consultas x %d reps)" % (n_consultas, r["_reps"]))
@@ -414,6 +415,8 @@ def _imprimir(r, n_consultas):
     print("MEMORIA (RSS)")
     if r["memoria"]["rss_tras_entrenar_mb"] is not None:
         print("  tras entrenar   : %.1f MB" % r["memoria"]["rss_tras_entrenar_mb"])
+    if r["memoria"].get("rss_pico_arranque_mb") is not None:
+        print("  pico en arranque: %.1f MB" % r["memoria"]["rss_pico_arranque_mb"])
     if r["memoria"]["rss_pico_mb"] is not None:
         print("  pico en busqueda: %.1f MB" % r["memoria"]["rss_pico_mb"])
     print()
@@ -483,7 +486,7 @@ def main(argv=None):
         # y después aislamos los tiempos con una corrida manual.
         from rank_bm25 import BM25Okapi
 
-        from buscador_service import MODELO_EMBEDDINGS, PREFIJO_PASSAGE
+        from buscador_service import MODELO_EMBEDDINGS
 
         filas = database.obtener_todas_las_paginas()
         paginas = [(f[1], f[2], f[3]) for f in filas]
@@ -494,14 +497,32 @@ def main(argv=None):
 
         from fastembed import TextEmbedding
 
+        # Arrancamos el sampler ANTES de cargar el modelo: queremos el pico
+        # real de entrenar_modelo, no solo el de la fase de búsqueda.
+        muest_arranque = _MuestreadorRSS()
+        muest_arranque.start()
+
+        
+        # Una sola instancia, compartida con el buscador. Antes se creaban dos
+        # (esta y la interna de entrenar_modelo) y los dos modelos ONNX vivos
+        # al mismo tiempo inflaban el RSS.
         t0 = time.perf_counter()
-        modelo = TextEmbedding(model_name=MODELO_EMBEDDINGS, cache_dir=config.MODELOS_DIR)
-        list(modelo.embed([PREFIJO_PASSAGE + t for _, _, t in paginas]))
+        buscador.modelo = TextEmbedding(
+            model_name=MODELO_EMBEDDINGS, cache_dir=config.MODELOS_DIR
+        )
+        t_carga_modelo = time.perf_counter() - t0
+
+        # entrenar_modelo hace el cómputo de embeddings de una sola vez,
+        # igual que en producción. Antes se duplicaba acá y el arranque
+        # reportado salía al doble del real.
+        t0 = time.perf_counter()
+        buscador.entrenar_modelo()
         t_emb = time.perf_counter() - t0
 
-        # Ahora sí, entrenar el buscador de verdad (reusará lo que ya está cacheado)
-        buscador.entrenar_modelo()
-        t_total_arr = t_carga + t_bm25 + t_emb
+        t_total_arr = t_carga + t_bm25 + t_carga_modelo + t_emb
+
+        muest_arranque.detener()
+        rss_pico_arranque = muest_arranque.pico
 
         rss_tras_ent = _rss_bytes()
 
@@ -536,6 +557,7 @@ def main(argv=None):
             "arranque": {
                 "carga_db_s": round(t_carga, 4),
                 "bm25_s": round(t_bm25, 4),
+                "carga_modelo_s": round(t_carga_modelo, 4),
                 "embeddings_s": round(t_emb, 4),
                 "total_s": round(t_total_arr, 4),
             },
@@ -553,6 +575,11 @@ def main(argv=None):
             "memoria": {
                 "rss_tras_entrenar_mb": (
                     round(rss_tras_ent / (1024.0 * 1024.0), 1) if rss_tras_ent else None
+                ),
+                "rss_pico_arranque_mb": (
+                    round(rss_pico_arranque / (1024.0 * 1024.0), 1)
+                    if rss_pico_arranque
+                    else None
                 ),
                 "rss_pico_mb": round(mem_mb, 1) if rss_pico else None,
             },

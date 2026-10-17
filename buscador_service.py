@@ -24,7 +24,12 @@ try:
         normalization=True,
         sources=ModelSource(hf="intfloat/multilingual-e5-small"),
         dim=384,
-        model_file="onnx/model.onnx",
+        # INT8 cuantizado portable: ~113 MB en disco (vs ~470 MB del FP32).
+        # Se eligio model_O4 y no model_qint8_avx512_vnni porque este equipo
+        # (y probablemente el del usuario final) no tiene AVX-512 + VNNI.
+        # Cargar la variante avx512 sin esos flags puede ser MAS LENTO que
+        # el FP32. Verificado en Debian x86_64 sin AVX-512.
+        model_file="onnx/model_O4.onnx",
     )
     print("Modelo e5-small registrado manualmente.")
 except Exception as e:
@@ -46,8 +51,13 @@ ANCHO_FRAGMENTO = 300
 TOKEN_RE = re.compile(r"\w\w+")
 PREFIJO_PASSAGE = "passage: "
 PREFIJO_QUERY = "query: "
-
-
+EMBED_DIM = 384
+# Curva medida en Debian x86_64, 4 nucleos, corpus 300 pags:
+#   32  -> 112 s / 1.46 GB
+#   64  ->  85 s / 1.50 GB   <- punto elegido
+#   128 ->  81 s / 2.14 GB   (codo: +643 MB por -4 s)
+#   256 ->  54 s / 5.80 GB
+BATCH_SIZE = 64
 # ---------------------------------------------------------------------------
 # Helpers (fragmento, coleccion)
 # ---------------------------------------------------------------------------
@@ -185,11 +195,18 @@ class BuscadorHibrido:
 
         # e5 requiere "passage: " para los documentos
         textos = [PREFIJO_PASSAGE + t for _, _, t in self.paginas]
-        self.embeddings = np.array(list(self.modelo.embed(textos)), dtype=np.float32)
-        # Normalizar para que el producto punto sea coseno
+        n = len(textos)
+        # Prealocamos float32 y copiamos cada vector: evita materializar la
+        # lista intermedia de ndarrays y mantiene el dtype de punta a punta.
+        self.embeddings = np.empty((n, EMBED_DIM), dtype=np.float32)
+        for i, vec in enumerate(self.modelo.embed(textos, batch_size=BATCH_SIZE)):
+            self.embeddings[i] = vec
+            
+        assert i == n - 1, "fastembed devolvio %d vectores, esperaba %d" % (i + 1, n)
+        # Normalizar in-place: mismo resultado, sin array temporal nuevo.
         normas = np.linalg.norm(self.embeddings, axis=1, keepdims=True)
         normas[normas == 0] = 1.0
-        self.embeddings = self.embeddings / normas
+        self.embeddings /= normas
         np.save(ruta_emb, {"hash": hash_actual, "emb": self.embeddings})
         self._entrenado = True
         return True
@@ -221,7 +238,10 @@ class BuscadorHibrido:
                 model_name=MODELO_EMBEDDINGS,
                 cache_dir=config.MODELOS_DIR,
             )
-        q_emb = np.array(list(self.modelo.embed([PREFIJO_QUERY + query])), dtype=np.float32)[0]
+        q_emb = np.asarray(
+            next(iter(self.modelo.embed([PREFIJO_QUERY + query], batch_size=1))),
+            dtype=np.float32,
+        )
         q_emb = q_emb / (np.linalg.norm(q_emb) or 1.0)
         scores_denso = self.embeddings @ q_emb
 

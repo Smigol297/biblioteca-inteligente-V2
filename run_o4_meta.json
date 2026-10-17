@@ -1,0 +1,12 @@
+{
+  "modelo": "o4",
+  "archivo_onnx": "onnx/model_O4.onnx",
+  "consultas": [
+    "unit test",
+    "God Class",
+    "refactoring",
+    "patrones de diseño",
+    "acoplamiento"
+  ],
+  "paginas": 500
+}
