@@ -18,7 +18,7 @@ jobs:
         include:
           - name: windows-x64
             os: windows-latest
-            python: "3.9"
+            python: "3.11"
           - name: macos-apple-silicon
             os: macos-14
             python: "3.11"
