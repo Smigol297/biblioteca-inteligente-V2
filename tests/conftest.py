@@ -166,7 +166,8 @@ def crear_pdf():
         return ruta
 
     return _crear
-    
+
+
 @pytest.fixture(autouse=True)
 def sin_traductor(monkeypatch):
     """Evita cargar CTranslate2 en tests. El traductor devuelve la query

@@ -338,9 +338,10 @@ class BuscadorHibrido:
 
     # -- busqueda -----------------------------------------------------------
 
-    def buscar(self, query, top_k=100, agrupar=False, coleccion=None,
-               umbral_rel=None, traducir=True):
-        
+    def buscar(
+        self, query, top_k=100, agrupar=False, coleccion=None, umbral_rel=None, traducir=True
+    ):
+
         if not self._entrenado or not query.strip():
             return []
         # Traducción: solo si traducir=True. Fallback a la original si falla.
@@ -348,6 +349,7 @@ class BuscadorHibrido:
         if traducir:
             try:
                 from traductor_service import traducir_si_espanol
+
                 query_en = traducir_si_espanol(query)
             except Exception:
                 query_en = query  # fallback: traductor no disponible

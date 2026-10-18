@@ -350,7 +350,7 @@ def _medir(buscador, consultas, reps):
 
             # Pipeline completo (RRF incluido)
             t0 = time.perf_counter()
-            buscador.buscar(q, top_k=50,traducir=False)
+            buscador.buscar(q, top_k=50, traducir=False)
             t_total = time.perf_counter() - t0
 
             filas.append({"q": q, "bm25": t_bm25, "denso": t_denso, "total": t_total})
