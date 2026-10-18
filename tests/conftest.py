@@ -37,37 +37,28 @@ def entorno(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-class _FakeEmbedding:
-    """Reemplazo determinista de TextEmbedding para tests.
-
-    Es una bolsa de palabras hasheada: dos textos con palabras en comun
-    tienen producto punto > 0, lo cual alcanza para verificar que el denso
-    aporta algo. No descarga nada ni toca internet.
-
-    Guarda los textos que recibe en `textos_recibidos` (variable de clase)
-    para que los tests puedan verificar los prefijos "query:" / "passage:".
-    """
-
+class _FakeE5:
     DIM = 384
     textos_recibidos = []
 
-    def __init__(self, *args, **kwargs):
-        # Ignoramos model_name, cache_dir y demas: al fake le da igual.
+    def __init__(self, *a, **kw):
         pass
 
-    def embed(self, textos, batch_size=None, **kwargs):
-        # batch_size y kwargs se ignoran a propósito: el fake produce lo mismo
-        # sin importar cómo se trocee la entrada.
+    def passage(self, textos):
         for t in textos:
-            _FakeEmbedding.textos_recibidos.append(t)
-            v = np.zeros(self.DIM, dtype=np.float32)
-            for palabra in t.lower().split():
-                idx = abs(hash(palabra)) % self.DIM
-                v[idx] += 1.0
-            n = float(np.linalg.norm(v))
-            if n > 0:
-                v = v / n
-            yield v
+            _FakeE5.textos_recibidos.append(t)
+        return np.array([self._vec(t) for t in textos], dtype=np.float32)
+
+    def query(self, texto):
+        _FakeE5.textos_recibidos.append(texto)
+        return self._vec(texto)
+
+    def _vec(self, t):
+        v = np.zeros(self.DIM, dtype=np.float32)
+        for palabra in t.lower().split():
+            v[abs(hash(palabra)) % self.DIM] += 1.0
+        n = float(np.linalg.norm(v))
+        return v / n if n > 0 else v
 
 
 @pytest.fixture(autouse=True)
@@ -79,14 +70,13 @@ def sin_modelo_real(monkeypatch):
     """
     import buscador_service
 
-    monkeypatch.setattr(buscador_service, "TextEmbedding", _FakeEmbedding)
-    _FakeEmbedding.textos_recibidos = []
+    monkeypatch.setattr(buscador_service, "E5", _FakeE5)
 
 
 @pytest.fixture
 def fake_embedding():
     """Expone la clase fake para que los tests inspeccionen sus capturas."""
-    return _FakeEmbedding
+    return _FakeE5
 
 
 # ---------------------------------------------------------------------------

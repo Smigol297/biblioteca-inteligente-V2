@@ -340,10 +340,9 @@ def _medir(buscador, consultas, reps):
             t_bm25 = time.perf_counter() - t0
 
             # Densa sola
+            # Densa sola
             t0 = time.perf_counter()
-            from buscador_service import PREFIJO_QUERY
-
-            q_emb = np.array(list(buscador.modelo.embed([PREFIJO_QUERY + q])), dtype=np.float32)[0]
+            q_emb = np.asarray(buscador.modelo.query(q), dtype=np.float32)
             q_emb = q_emb / (np.linalg.norm(q_emb) or 1.0)
             scores_denso = buscador.embeddings @ q_emb
             np.argsort(-scores_denso)
@@ -459,7 +458,7 @@ def main(argv=None):
         print("ERROR: valores deben ser >= 1", file=sys.stderr)
         return 2
 
-    from buscador_service import PREFIJO_QUERY, BuscadorHibrido  # noqa
+    from buscador_service import BuscadorHibrido  # noqa
 
     sistema = {
         "so": platform.platform(),
@@ -486,8 +485,6 @@ def main(argv=None):
         # y después aislamos los tiempos con una corrida manual.
         from rank_bm25 import BM25Okapi
 
-        from buscador_service import MODELO_EMBEDDINGS
-
         filas = database.obtener_todas_las_paginas()
         paginas = [(f[1], f[2], f[3]) for f in filas]
 
@@ -495,7 +492,7 @@ def main(argv=None):
         BM25Okapi([t.lower().split() for _, _, t in paginas])
         t_bm25 = time.perf_counter() - t0
 
-        from fastembed import TextEmbedding
+        from nanoe5 import E5
 
         # Arrancamos el sampler ANTES de cargar el modelo: queremos el pico
         # real de entrenar_modelo, no solo el de la fase de búsqueda.
@@ -506,7 +503,7 @@ def main(argv=None):
         # (esta y la interna de entrenar_modelo) y los dos modelos ONNX vivos
         # al mismo tiempo inflaban el RSS.
         t0 = time.perf_counter()
-        buscador.modelo = TextEmbedding(model_name=MODELO_EMBEDDINGS, cache_dir=config.MODELOS_DIR)
+        buscador.modelo = E5()
         t_carga_modelo = time.perf_counter() - t0
 
         # entrenar_modelo hace el cómputo de embeddings de una sola vez,

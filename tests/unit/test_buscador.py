@@ -121,22 +121,20 @@ def test_rrf_fusiona_bm25_y_denso(crear_buscador, monkeypatch):
 
     class _Semantico:
         DIM = 384
+        def __init__(self, *a, **kw): pass
+        def passage(self, textos):
+            return np.array([self._vec(t) for t in textos], dtype=np.float32)
+        def query(self, texto):
+            return self._vec(texto)
+        def _vec(self, t):
+            v = np.zeros(self.DIM, dtype=np.float32)
+            if "semantico" in t.lower():
+                v[0] = 1.0
+            else:
+                v[1] = 1.0
+            return v
 
-        def __init__(self, *a, **kw):
-            pass
-
-        def embed(self, textos, batch_size=None, **kwargs):
-            # batch_size y kwargs se ignoran: el fake produce lo mismo
-            # sin importar cómo se trocee la entrada.
-            for t in textos:
-                v = np.zeros(self.DIM, dtype=np.float32)
-                if "semantico" in t.lower():
-                    v[0] = 1.0
-                else:
-                    v[1] = 1.0
-                yield v
-
-    monkeypatch.setattr(buscador_service, "TextEmbedding", _Semantico)
+    monkeypatch.setattr(buscador_service, "E5", _Semantico)
 
     buscador = crear_buscador(
         {
@@ -160,21 +158,15 @@ def test_rrf_fusiona_bm25_y_denso(crear_buscador, monkeypatch):
 # ---------- prefijos de e5 ----------
 
 
-def test_prefijos_query_y_passage(crear_buscador, fake_embedding):
-    """e5 requiere 'passage: ' en los documentos y 'query: ' en la consulta.
-    Omitirlos degrada el recall.
-    """
+def test_query_y_passage_se_llaman_por_separado(crear_buscador, fake_embedding):
     fake_embedding.textos_recibidos = []
     buscador = crear_buscador(LIBROS)
-
-    # Durante el entrenamiento, todos los textos van con 'passage: '.
-    assert fake_embedding.textos_recibidos
-    assert all(t.startswith("passage: ") for t in fake_embedding.textos_recibidos)
-
-    # Durante la busqueda, la consulta va con 'query: '.
+    # Entrenamiento usa passage()
+    assert all(not t.startswith("query:") for t in fake_embedding.textos_recibidos)
     fake_embedding.textos_recibidos = []
     buscador.buscar("fotosintesis")
-    assert fake_embedding.textos_recibidos == ["query: fotosintesis"]
+    # Busqueda usa query() (nanoe5 internamente agrega el prefijo)
+    assert fake_embedding.textos_recibidos == ["fotosintesis"]
 
 
 # ---------- indexado incremental ----------
@@ -201,7 +193,7 @@ def test_incremental_solo_embebe_el_archivo_nuevo(crear_buscador, fake_embedding
 
     b = B()
     b.entrenar_modelo()
-    assert fake_embedding.textos_recibidos == ["passage: contenido flamante"]
+    assert fake_embedding.textos_recibidos == ["contenido flamante"]
 
 
 def test_incremental_reembebe_archivo_modificado(crear_buscador, fake_embedding):
@@ -213,7 +205,7 @@ def test_incremental_reembebe_archivo_modificado(crear_buscador, fake_embedding)
 
     b = B()
     b.entrenar_modelo()
-    assert fake_embedding.textos_recibidos == ["passage: texto cambiado de biologia"]
+    assert fake_embedding.textos_recibidos == ["texto cambiado de biologia"]
 
 
 def test_incremental_borra_huerfanos_sin_embeber(crear_buscador, fake_embedding):
@@ -261,9 +253,8 @@ def test_ensamblado_respeta_orden_de_paginas(crear_buscador):
     # Verificar contra b.paginas: para cada i, embeddings[i] tiene que
     # ser el vector de paginas[i]. Recalculamos con el fake y comparamos.
     import numpy as np
-    from conftest import _FakeEmbedding
-
-    fake = _FakeEmbedding()
+    from conftest import _FakeE5
+    fake = _FakeE5()
     for i, (_, _, texto) in enumerate(b.paginas):
-        esperado = next(fake.embed(["passage: " + texto]))
+        esperado = fake.passage([texto])[0]
         np.testing.assert_allclose(b.embeddings[i], esperado, rtol=1e-5)

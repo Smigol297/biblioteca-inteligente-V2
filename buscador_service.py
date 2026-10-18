@@ -9,8 +9,7 @@ import os
 import re
 
 import numpy as np
-from fastembed import TextEmbedding
-from fastembed.common.model_description import ModelSource, PoolingType
+from nanoe5 import E5
 from rank_bm25 import BM25Okapi
 
 from config import BATCH_SIZE
@@ -19,24 +18,6 @@ from config import BATCH_SIZE
 # fastembed 0.9.0 solo incluye multilingual-e5-large. Registramos el small
 # explícitamente para que TextEmbedding lo reconozca.
 # Ver: https://github.com/qdrant/fastembed/issues/123
-try:
-    TextEmbedding.add_custom_model(
-        model="intfloat/multilingual-e5-small",
-        pooling=PoolingType.MEAN,
-        normalization=True,
-        sources=ModelSource(hf="intfloat/multilingual-e5-small"),
-        dim=384,
-        # INT8 cuantizado portable: ~113 MB en disco (vs ~470 MB del FP32).
-        # Se eligio model_O4 y no model_qint8_avx512_vnni porque este equipo
-        # (y probablemente el del usuario final) no tiene AVX-512 + VNNI.
-        # Cargar la variante avx512 sin esos flags puede ser MAS LENTO que
-        # el FP32. Verificado en Debian x86_64 sin AVX-512.
-        model_file="onnx/model_O4.onnx",
-    )
-    print("Modelo e5-small registrado manualmente.")
-except Exception as e:
-    print("Aviso: no se pudo registrar e5-small: %s" % e)
-# ---------------------------------------------------------------------------
 
 import config
 import database
@@ -51,8 +32,7 @@ UMBRAL_REL = 0.3
 UMBRAL_DENSO_MIN = 0.4  # coseno minimo para considerar que hay match semantico
 ANCHO_FRAGMENTO = 300
 TOKEN_RE = re.compile(r"\w\w+")
-PREFIJO_PASSAGE = "passage: "
-PREFIJO_QUERY = "query: "
+MODELO_ID = "nanoe5|e5-small|original|dim=384|l2=1"
 EMBED_DIM = 384
 # Curva medida en Debian x86_64, 4 nucleos, corpus 300 pags:
 #   32  -> 112 s / 1.46 GB
@@ -191,10 +171,7 @@ class BuscadorHibrido:
         # consulta). Se preserva el comportamiento previo: carga al entrenar,
         # no en la primera búsqueda.
         if self.modelo is None:
-            self.modelo = TextEmbedding(
-                model_name=MODELO_EMBEDDINGS,
-                cache_dir=config.MODELOS_DIR,
-            )
+            self.modelo = E5()
 
         # 1) Si hay un embeddings.npy viejo y la tabla está vacía, migrarlo.
         self._migrar_npy_si_hace_falta(filas)
@@ -253,34 +230,30 @@ class BuscadorHibrido:
     # -- helpers de entrenamiento ------------------------------------------
 
     def _embeber_faltantes(self, faltantes, reusar, progreso, total_pags):
-        """Embebe los archivos nuevos/modificados y persiste por archivo.
-
-        Persistir apenas se termina cada archivo (en vez de al final) hace
-        que un crash a mitad no pierda todo el trabajo hecho.
-        """
+        """Embebe los archivos nuevos/modificados y persiste por archivo."""
         if progreso is not None and total_pags > 0:
             progreso(0, total_pags)
         hechos = 0
         for arch, hash_, items in faltantes:
             n = len(items)
-            textos = [PREFIJO_PASSAGE + t for _, t in items]
+            textos = [t for _, t in items]  # nanoe5 maneja prefijos internamente
             emb = np.empty((n, EMBED_DIM), dtype=np.float32)
-            n_devueltos = 0
-            for i, vec in enumerate(self.modelo.embed(textos, batch_size=BATCH_SIZE)):
-                emb[i] = vec
-                n_devueltos += 1
-                hechos += 1
-                if progreso is not None:
-                    progreso(hechos, total_pags)
-            assert n_devueltos == n, "fastembed devolvio %d vectores, esperaba %d" % (
-                n_devueltos,
-                n,
+            for i in range(0, n, BATCH_SIZE):
+                trozo = textos[i : i + BATCH_SIZE]
+                emb[i : i + len(trozo)] = np.asarray(
+                    self.modelo.passage(trozo), dtype=np.float32
+                )
+                for _ in trozo:
+                    hechos += 1
+                    if progreso is not None:
+                        progreso(hechos, total_pags)
+            assert emb.shape == (n, EMBED_DIM), (
+                "shape inesperado: %s (esperaba %s)" % (emb.shape, (n, EMBED_DIM))
             )
             normas = np.linalg.norm(emb, axis=1, keepdims=True)
             normas[normas == 0] = 1.0
             emb /= normas
             reusar[arch] = emb
-            # Persistir inmediatamente: si el proceso muere, este archivo queda.
             database.guardar_embeddings_bulk([(arch, hash_, emb)], MODELO_ID)
 
     def _migrar_npy_si_hace_falta(self, filas):
@@ -357,10 +330,7 @@ class BuscadorHibrido:
         # El modelo se carga siempre: buscar() lo necesita para embeber la
         # consulta, aunque los embeddings del corpus se reusen del .npy.
         if self.modelo is None:
-            self.modelo = TextEmbedding(
-                model_name=MODELO_EMBEDDINGS,
-                cache_dir=config.MODELOS_DIR,
-            )
+            self.modelo = E5()
 
         # Embeddings: reusar si el corpus no cambio
         ruta_emb = os.path.join(config.BASE_DIR, "embeddings.npy")
@@ -425,21 +395,13 @@ class BuscadorHibrido:
         tokens = query.lower().split()
         scores_bm25 = np.array(self.bm25.get_scores(tokens))
         # Mascara de overlap: docs que comparten al menos un token con la consulta.
-        # No alcanza con "score > 0" porque con terminos frecuentes el IDF de
-        # BM25 es negativo y un doc relevante termina con score negativo.
         tokens_set = set(tokens)
         mask_bm25 = np.array([bool(tokens_set & set(doc)) for doc in self.corpus_tokens])
 
-        # e5 requiere "query: " para la consulta
+        # nanoe5 maneja el prefijo "query:" internamente
         if self.modelo is None:
-            self.modelo = TextEmbedding(
-                model_name=MODELO_EMBEDDINGS,
-                cache_dir=config.MODELOS_DIR,
-            )
-        q_emb = np.asarray(
-            next(iter(self.modelo.embed([PREFIJO_QUERY + query], batch_size=1))),
-            dtype=np.float32,
-        )
+            self.modelo = E5()
+        q_emb = np.asarray(self.modelo.query(query), dtype=np.float32)
         q_emb = q_emb / (np.linalg.norm(q_emb) or 1.0)
         scores_denso = self.embeddings @ q_emb
 
