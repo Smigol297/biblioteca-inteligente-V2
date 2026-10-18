@@ -502,14 +502,11 @@ def main(argv=None):
         muest_arranque = _MuestreadorRSS()
         muest_arranque.start()
 
-        
         # Una sola instancia, compartida con el buscador. Antes se creaban dos
         # (esta y la interna de entrenar_modelo) y los dos modelos ONNX vivos
         # al mismo tiempo inflaban el RSS.
         t0 = time.perf_counter()
-        buscador.modelo = TextEmbedding(
-            model_name=MODELO_EMBEDDINGS, cache_dir=config.MODELOS_DIR
-        )
+        buscador.modelo = TextEmbedding(model_name=MODELO_EMBEDDINGS, cache_dir=config.MODELOS_DIR)
         t_carga_modelo = time.perf_counter() - t0
 
         # entrenar_modelo hace el cómputo de embeddings de una sola vez,
@@ -577,9 +574,7 @@ def main(argv=None):
                     round(rss_tras_ent / (1024.0 * 1024.0), 1) if rss_tras_ent else None
                 ),
                 "rss_pico_arranque_mb": (
-                    round(rss_pico_arranque / (1024.0 * 1024.0), 1)
-                    if rss_pico_arranque
-                    else None
+                    round(rss_pico_arranque / (1024.0 * 1024.0), 1) if rss_pico_arranque else None
                 ),
                 "rss_pico_mb": round(mem_mb, 1) if rss_pico else None,
             },

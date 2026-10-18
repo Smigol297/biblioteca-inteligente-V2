@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Tests del BuscadorHibrido (BM25 + e5-small + RRF)."""
-from buscador_service import BuscadorHibrido
-
+import database
+from buscador_service import MODELO_ID, BuscadorHibrido
 LIBROS = {
     "biologia.txt": [
         "La fotosintesis convierte la luz solar en energia quimica dentro de las plantas",
@@ -174,3 +174,92 @@ def test_prefijos_query_y_passage(crear_buscador, fake_embedding):
     fake_embedding.textos_recibidos = []
     buscador.buscar("fotosintesis")
     assert fake_embedding.textos_recibidos == ["query: fotosintesis"]
+
+# ---------- indexado incremental ----------
+
+
+def test_incremental_no_reembebe_lo_que_no_cambio(crear_buscador, fake_embedding):
+    """Segundo entrenar sin cambios no llama a embed."""
+    crear_buscador(LIBROS)
+    fake_embedding.textos_recibidos = []
+
+    from buscador_service import BuscadorHibrido as B
+    b2 = B()
+    assert b2.entrenar_modelo() is True
+    assert fake_embedding.textos_recibidos == []
+
+
+def test_incremental_solo_embebe_el_archivo_nuevo(crear_buscador, fake_embedding):
+    crear_buscador(LIBROS)
+    database.reemplazar_archivo("nuevo.txt", [(1, "contenido flamante")])
+    fake_embedding.textos_recibidos = []
+
+    from buscador_service import BuscadorHibrido as B
+    b = B()
+    b.entrenar_modelo()
+    assert fake_embedding.textos_recibidos == ["passage: contenido flamante"]
+
+
+def test_incremental_reembebe_archivo_modificado(crear_buscador, fake_embedding):
+    crear_buscador(LIBROS)
+    database.reemplazar_archivo("biologia.txt", [(1, "texto cambiado de biologia")])
+    fake_embedding.textos_recibidos = []
+
+    from buscador_service import BuscadorHibrido as B
+    b = B()
+    b.entrenar_modelo()
+    assert fake_embedding.textos_recibidos == ["passage: texto cambiado de biologia"]
+
+
+def test_incremental_borra_huerfanos_sin_embeber(crear_buscador, fake_embedding):
+    crear_buscador(LIBROS)
+    database.reemplazar_archivo("cocina.txt", [])  # desaparece la fila
+    fake_embedding.textos_recibidos = []
+
+    from buscador_service import BuscadorHibrido as B
+    b = B()
+    b.entrenar_modelo()
+    assert fake_embedding.textos_recibidos == []
+    assert "cocina.txt" not in database.obtener_embeddings(MODELO_ID)
+    # Y no rompe el ensamblado: quedan las páginas de biologia e historia.
+    assert b.embeddings.shape[0] == len(b.paginas)
+
+
+def test_modelo_id_bumpeado_fuerza_reindexado(crear_buscador, fake_embedding, monkeypatch):
+    import buscador_service
+
+    crear_buscador(LIBROS)
+    monkeypatch.setattr(buscador_service, "MODELO_ID", "otro-modelo-cualquiera")
+    fake_embedding.textos_recibidos = []
+
+    from buscador_service import BuscadorHibrido as B
+    b = B()
+    b.entrenar_modelo()
+    # Se re-embeben todas las páginas con el modelo "nuevo".
+    assert len(fake_embedding.textos_recibidos) == sum(len(p) for p in LIBROS.values())
+
+
+def test_busqueda_anda_despues_de_incremental(crear_buscador):
+    b = crear_buscador(LIBROS)
+    database.reemplazar_archivo(
+        "nuevo.txt", [(1, "revolucion industrial vapor carbon hierro")]
+    )
+    b.entrenar_modelo()
+
+    assert b.buscar("fotosintesis")[0]["archivo"] == "biologia.txt"
+    assert b.buscar("revolucion industrial")[0]["archivo"] == "nuevo.txt"
+
+
+def test_ensamblado_respeta_orden_de_paginas(crear_buscador):
+    b = crear_buscador({"a.txt": ["aaa", "bbb"], "b.txt": ["ccc", "ddd"]})
+    assert b.embeddings.shape == (4, 384)
+    # Verificar contra b.paginas: para cada i, embeddings[i] tiene que
+    # ser el vector de paginas[i]. Recalculamos con el fake y comparamos.
+    import numpy as np
+
+    from conftest import _FakeEmbedding
+
+    fake = _FakeEmbedding()
+    for i, (_, _, texto) in enumerate(b.paginas):
+        esperado = next(fake.embed(["passage: " + texto]))
+        np.testing.assert_allclose(b.embeddings[i], esperado, rtol=1e-5)

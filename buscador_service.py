@@ -58,6 +58,11 @@ EMBED_DIM = 384
 #   128 ->  81 s / 2.14 GB   (codo: +643 MB por -4 s)
 #   256 ->  54 s / 5.80 GB
 BATCH_SIZE = 64
+# Identificador del modelo. Bumpear si cambia: model_file (O4→FP32), el modelo
+# base, la dimensión, o la normalización. Al bumpear, todo se re-embebe en el
+# siguiente entrenar_modelo().
+MODELO_ID = "e5-small|O4|dim=384|l2=1"
+
 # ---------------------------------------------------------------------------
 # Helpers (fragmento, coleccion)
 # ---------------------------------------------------------------------------
@@ -158,7 +163,181 @@ class BuscadorHibrido:
 
     # -- entrenamiento ------------------------------------------------------
 
-    def entrenar_modelo(self):
+    def entrenar_modelo(self, progreso=None):
+        """Entrena (o actualiza incrementalmente) BM25 + embeddings.
+
+        Reusa los embeddings de los archivos cuyo hash no cambió. Solo
+        re-embebe los nuevos o modificados. Borra los huérfanos (archivos
+        que ya no están en la DB). Si viene `progreso`, se llama
+        `progreso(i, total)` por cada página embebida.
+        """
+        filas = database.obtener_todas_las_paginas()
+        if not filas:
+            self._entrenado = False
+            self.embeddings = None
+            return False
+
+        self.paginas = [(f[1], f[2], f[3]) for f in filas]
+        self.colecciones = np.array([_coleccion_de(a) for a, _, _ in self.paginas])
+
+        # BM25: mismo comportamiento que antes.
+        self.corpus_tokens = [t.lower().split() for _, _, t in self.paginas]
+        self.bm25 = BM25Okapi(self.corpus_tokens)
+
+        # El modelo se carga siempre (buscar lo necesita para embeber la
+        # consulta). Se preserva el comportamiento previo: carga al entrenar,
+        # no en la primera búsqueda.
+        if self.modelo is None:
+            self.modelo = TextEmbedding(
+                model_name=MODELO_EMBEDDINGS,
+                cache_dir=config.MODELOS_DIR,
+            )
+
+        # 1) Si hay un embeddings.npy viejo y la tabla está vacía, migrarlo.
+        self._migrar_npy_si_hace_falta(filas)
+
+        # 2) Agrupar por archivo y calcular hashes.
+        grupos = self._agrupar_por_archivo(filas)
+        hashes = {arch: self._hash_archivo(arch, items) for arch, items in grupos.items()}
+
+        # 3) Cargar los embeddings que ya tenemos para este modelo.
+        existentes = database.obtener_embeddings(MODELO_ID)
+
+        # 4) Particionar: reusar / faltantes / huérfanos.
+        reusar = {}
+        faltantes = []  # [(archivo, hash, items)]
+        for arch, items in grupos.items():
+            entry = existentes.get(arch)
+            if entry is not None:
+                h_guardado, n_guardado, dim_guardado, blob = entry
+                if (
+                    h_guardado == hashes[arch]
+                    and n_guardado == len(items)
+                    and dim_guardado == EMBED_DIM
+                ):
+                    emb = np.frombuffer(blob, dtype=np.float32).reshape(n_guardado, dim_guardado)
+                    reusar[arch] = emb
+                    continue
+            faltantes.append((arch, hashes[arch], items))
+
+        huerfanos = [a for a in existentes if a not in grupos]
+
+        # 5) Embeber solo los faltantes.
+        total_pags_faltantes = sum(len(items) for _, _, items in faltantes)
+        if faltantes:
+            self._embeber_faltantes(faltantes, reusar, progreso, total_pags_faltantes)
+
+        # 6) Borrar huérfanos.
+        if huerfanos:
+            database.borrar_embeddings_archivos(huerfanos)
+
+        # 7) Ensamblar en el orden exacto de self.paginas.
+        embeddings = np.empty((len(self.paginas), EMBED_DIM), dtype=np.float32)
+        idx = 0
+        for archivo, _items in grupos.items():
+            chunk = reusar[archivo]
+            embeddings[idx : idx + len(chunk)] = chunk
+            idx += len(chunk)
+        assert idx == len(self.paginas), (
+            "ensamblado inconsistente: %d filas vs %d paginas" % (idx, len(self.paginas))
+        )
+        self.embeddings = embeddings
+
+        self._entrenado = True
+        return True
+
+    # -- helpers de entrenamiento ------------------------------------------
+
+    def _embeber_faltantes(self, faltantes, reusar, progreso, total_pags):
+        """Embebe los archivos nuevos/modificados y persiste por archivo.
+
+        Persistir apenas se termina cada archivo (en vez de al final) hace
+        que un crash a mitad no pierda todo el trabajo hecho.
+        """
+        if progreso is not None and total_pags > 0:
+            progreso(0, total_pags)
+        hechos = 0
+        for arch, hash_, items in faltantes:
+            n = len(items)
+            textos = [PREFIJO_PASSAGE + t for _, t in items]
+            emb = np.empty((n, EMBED_DIM), dtype=np.float32)
+            n_devueltos = 0
+            for i, vec in enumerate(self.modelo.embed(textos, batch_size=BATCH_SIZE)):
+                emb[i] = vec
+                n_devueltos += 1
+                hechos += 1
+                if progreso is not None:
+                    progreso(hechos, total_pags)
+            assert n_devueltos == n, "fastembed devolvio %d vectores, esperaba %d" % (
+                n_devueltos,
+                n,
+            )
+            normas = np.linalg.norm(emb, axis=1, keepdims=True)
+            normas[normas == 0] = 1.0
+            emb /= normas
+            reusar[arch] = emb
+            # Persistir inmediatamente: si el proceso muere, este archivo queda.
+            database.guardar_embeddings_bulk([(arch, hash_, emb)], MODELO_ID)
+
+    def _migrar_npy_si_hace_falta(self, filas):
+        """Migra embeddings.npy viejo a la tabla, una sola vez.
+
+        Verifica el hash global del .npy contra el corpus actual antes de
+        confiar en el orden. Si no coincide, no migra: se reindexa entero
+        (comportamiento seguro). Al terminar, renombra el .npy a .bak.
+        """
+        ruta = os.path.join(config.BASE_DIR, "embeddings.npy")
+        if not os.path.exists(ruta):
+            return
+        if database.obtener_embeddings(MODELO_ID):
+            return  # ya hay datos para este modelo, nada que migrar
+        try:
+            datos = np.load(ruta, allow_pickle=True).item()
+        except Exception as e:
+            print("No se pudo leer embeddings.npy (%s); se ignora." % e)
+            return
+
+        emb = datos.get("emb")
+        if emb is None or not hasattr(emb, "shape") or emb.shape[0] != len(filas):
+            print(
+                "embeddings.npy no coincide con la DB (%s vs %d); se reindexa."
+                % (getattr(emb, "shape", ("?",))[0], len(filas))
+            )
+            return
+        if emb.shape[1] != EMBED_DIM:
+            print(
+                "embeddings.npy tiene dim %d, esperaba %d; se reindexa."
+                % (emb.shape[1], EMBED_DIM)
+            )
+            return
+
+        # Verificar el hash global: garantiza que el .npy se construyó con
+        # el mismo contenido y en el mismo orden que filas.
+        h_esp = hashlib.md5()
+        for a, p, t in self.paginas:
+            h_esp.update(("%s|%s|%s" % (a, p, t)).encode("utf-8", errors="replace"))
+        if datos.get("hash") != h_esp.hexdigest():
+            print("embeddings.npy no coincide con el corpus (hash); se reindexa.")
+            return
+
+        grupos = self._agrupar_por_archivo(filas)
+        a_persistir = []
+        pos = 0
+        for arch, items in grupos.items():
+            fin = pos + len(items)
+            chunk = np.ascontiguousarray(emb[pos:fin], dtype=np.float32)
+            a_persistir.append((arch, self._hash_archivo(arch, items), chunk))
+            pos = fin
+        if pos != emb.shape[0]:
+            print("embeddings.npy no cubre todas las filas; se reindexa.")
+            return
+
+        database.guardar_embeddings_bulk(a_persistir, MODELO_ID)
+        try:
+            os.rename(ruta, ruta + ".bak")
+        except OSError:
+            pass
+        print("embeddings.npy migrado a SQLite (%d archivos)." % len(a_persistir))
         filas = database.obtener_todas_las_paginas()
         if not filas:
             self._entrenado = False
@@ -201,7 +380,7 @@ class BuscadorHibrido:
         self.embeddings = np.empty((n, EMBED_DIM), dtype=np.float32)
         for i, vec in enumerate(self.modelo.embed(textos, batch_size=BATCH_SIZE)):
             self.embeddings[i] = vec
-            
+
         assert i == n - 1, "fastembed devolvio %d vectores, esperaba %d" % (i + 1, n)
         # Normalizar in-place: mismo resultado, sin array temporal nuevo.
         normas = np.linalg.norm(self.embeddings, axis=1, keepdims=True)
@@ -211,11 +390,28 @@ class BuscadorHibrido:
         self._entrenado = True
         return True
 
-    def _hash_corpus(self):
+    def _hash_archivo(self,archivo, items):
+        """Hash de un archivo: nombre + (pagina, texto) en orden. Renombrar
+        invalida, y también cualquier cambio de texto o numeración de páginas."""
         h = hashlib.md5()
-        for a, p, t in self.paginas:
-            h.update(("%s|%s|%s" % (a, p, t)).encode("utf-8", errors="replace"))
+        h.update(archivo.encode("utf-8", errors="replace"))
+        for p, t in items:
+            h.update(b"\x00")
+            h.update(str(p).encode())
+            h.update(b"\x00")
+            h.update(t.encode("utf-8", errors="replace"))
         return h.hexdigest()
+
+
+    def _agrupar_por_archivo(self,filas):
+        """filas = [(id, archivo, pagina, texto)] en orden de id.
+
+        Devuelve dict {archivo: [(pagina, texto), ...]} en orden de primera
+        aparición (= orden de id, que es el que devuelve la DB)."""
+        grupos = {}
+        for _id, archivo, pagina, texto in filas:
+            grupos.setdefault(archivo, []).append((pagina, texto))
+        return grupos
 
     # -- busqueda -----------------------------------------------------------
 

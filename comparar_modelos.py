@@ -71,9 +71,7 @@ def _embeber(modelo, textos):
 
 
 def _embeber_query(modelo, q):
-    v = np.asarray(
-        next(iter(modelo.embed([PREFIJO_QUERY + q], batch_size=1))), dtype=np.float32
-    )
+    v = np.asarray(next(iter(modelo.embed([PREFIJO_QUERY + q], batch_size=1))), dtype=np.float32)
     n = float(np.linalg.norm(v)) or 1.0
     return v / n
 
@@ -144,8 +142,7 @@ def main():
             extra = " (FP32-solo: %d, INT8-solo: %d)" % (solo32, solo_o4)
         print("%-45s %d/%d%s" % (q[:44], overlap, args.topk, extra))
 
-    print("\nListo. Si el overlap es consistentemente <%d, INT8 no es opcion."
-          % (args.topk - 2))
+    print("\nListo. Si el overlap es consistentemente <%d, INT8 no es opcion." % (args.topk - 2))
     return 0
 
 

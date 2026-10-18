@@ -82,9 +82,21 @@ def main():
     np.save(args.salida + "_corpus.npy", corpus)
     np.save(args.salida + "_queries.npy", queries)
     with open(args.salida + "_meta.json", "w", encoding="utf-8") as f:
-        json.dump({"modelo": args.modelo, "archivo_onnx": archivo_onnx,
-                   "consultas": consultas, "paginas": len(textos)}, f, ensure_ascii=False, indent=2)
-    print("[%s] Guardado en %s_{corpus,queries}.npy y %s_meta.json" % (args.modelo, args.salida, args.salida))
+        json.dump(
+            {
+                "modelo": args.modelo,
+                "archivo_onnx": archivo_onnx,
+                "consultas": consultas,
+                "paginas": len(textos),
+            },
+            f,
+            ensure_ascii=False,
+            indent=2,
+        )
+    print(
+        "[%s] Guardado en %s_{corpus,queries}.npy y %s_meta.json"
+        % (args.modelo, args.salida, args.salida)
+    )
     return 0
 
 

@@ -13,4 +13,8 @@ docs/
 .vscode/
 embeddings.npy
 docker/model_cache/
+*.bak_*
+buscador_service.py.bak_incremental
+embeddings.npy.bak
 model_cache/
+tmp/
