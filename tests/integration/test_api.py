@@ -183,6 +183,7 @@ def test_eliminar_archivo_fisico_ausente_limpia_db(biblioteca, entorno):
     assert r.status_code == 200
     assert "biologia.txt" not in database.obtener_archivos_indexados()
 
+
 # ---------- seguridad ----------
 
 

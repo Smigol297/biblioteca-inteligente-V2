@@ -447,6 +447,7 @@ def _limpiar_nombre(nombre):
     nombre = (nombre or "").replace("\\", "/").split("/")[-1].strip()
     return "" if nombre in (".", "..") else nombre
 
+
 def _resolver_ruta_en_pdfs(archivo):
     """Devuelve la ruta absoluta de `archivo` dentro de config.CARPETA_PDFS.
 
@@ -467,6 +468,7 @@ def _resolver_ruta_en_pdfs(archivo):
     if ruta == raiz or not ruta.startswith(raiz + os.sep):
         return None
     return ruta
+
 
 @app.route("/subir", methods=["POST"])
 def api_subir():
@@ -508,6 +510,7 @@ def api_reentrenar():
     buscador.entrenar_modelo()
     return jsonify({"exito": True})
 
+
 @app.route("/eliminar", methods=["POST"])
 def api_eliminar():
     datos = request.get_json(silent=True) or {}
@@ -544,6 +547,7 @@ def api_eliminar():
         print("Fallo reentrenamiento tras eliminar '%s': %s" % (archivo, e))
 
     return jsonify({"exito": True, "mensaje": "'%s' eliminado." % archivo})
+
 
 @app.route("/colecciones")
 def api_colecciones():

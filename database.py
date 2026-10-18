@@ -169,6 +169,7 @@ def borrar_embeddings_archivos(archivos):
     finally:
         conn.close()
 
+
 def borrar_archivo(archivo):
     """Borra las páginas y el embedding de un archivo en una sola transacción.
 
