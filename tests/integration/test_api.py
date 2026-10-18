@@ -118,6 +118,71 @@ def test_colecciones_vacio(cliente):
     assert cliente.get("/colecciones").get_json() == {"colecciones": [], "hay_sin": False}
 
 
+# ---------- eliminar ----------
+
+
+def test_eliminar_archivo_indexado(biblioteca, entorno):
+    assert (entorno / "biologia.txt").exists()
+    r = biblioteca.post("/eliminar", json={"archivo": "biologia.txt"})
+    assert r.status_code == 200
+    assert r.get_json()["exito"] is True
+
+    assert "biologia.txt" not in database.obtener_archivos_indexados()
+    assert not (entorno / "biologia.txt").exists()
+
+    # Ya no aparece en búsquedas, pero los otros sí.
+    assert biblioteca.get("/buscar?q=fotosintesis").get_json() == []
+    assert biblioteca.get("/buscar?q=torta").get_json()[0]["archivo"] == "cocina.txt"
+    assert (entorno / "cocina.txt").exists()
+
+
+def test_eliminar_archivo_con_coleccion(biblioteca, entorno):
+    subir(biblioteca, "torta.txt", COCINA, coleccion="recetas")
+    assert (entorno / "recetas" / "torta.txt").exists()
+
+    r = biblioteca.post("/eliminar", json={"archivo": "recetas/torta.txt"})
+    assert r.get_json()["exito"] is True
+    assert not (entorno / "recetas" / "torta.txt").exists()
+    assert "recetas/torta.txt" not in database.obtener_archivos_indexados()
+    # La colección 'recetas' desaparece de /colecciones
+    info = biblioteca.get("/colecciones").get_json()
+    assert "recetas" not in info["colecciones"]
+
+
+def test_eliminar_ultimo_archivo_de_coleccion_la_borra(biblioteca, entorno):
+    subir(biblioteca, "unico.txt", COCINA, coleccion="solo")
+    assert biblioteca.get("/colecciones").get_json()["colecciones"] == ["solo"]
+    biblioteca.post("/eliminar", json={"archivo": "solo/unico.txt"})
+    assert biblioteca.get("/colecciones").get_json()["colecciones"] == []
+
+
+def test_eliminar_inexistente_da_404(biblioteca):
+    assert biblioteca.post("/eliminar", json={"archivo": "no_existe.txt"}).status_code == 404
+
+
+def test_eliminar_sin_archivo_da_400(biblioteca):
+    assert biblioteca.post("/eliminar", json={}).status_code == 400
+    assert biblioteca.post("/eliminar", json={"archivo": ""}).status_code == 400
+
+
+def test_eliminar_no_sale_de_la_carpeta(biblioteca, entorno):
+    (entorno.parent / "secreto.txt").write_text("x" * 100, encoding="utf-8")
+    for malo in ["../secreto.txt", "..\\secreto.txt", "/etc/passwd", "a/../../secreto.txt"]:
+        assert biblioteca.post("/eliminar", json={"archivo": malo}).status_code == 400
+    assert (entorno.parent / "secreto.txt").exists()
+
+
+def test_eliminar_solo_acepta_post(biblioteca):
+    assert biblioteca.get("/eliminar").status_code == 405
+
+
+def test_eliminar_archivo_fisico_ausente_limpia_db(biblioteca, entorno):
+    # Simula: la DB tiene el archivo pero el .txt ya no está en disco.
+    (entorno / "biologia.txt").unlink()
+    r = biblioteca.post("/eliminar", json={"archivo": "biologia.txt"})
+    assert r.status_code == 200
+    assert "biologia.txt" not in database.obtener_archivos_indexados()
+
 # ---------- seguridad ----------
 
 

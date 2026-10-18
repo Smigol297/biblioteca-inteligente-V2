@@ -257,16 +257,17 @@ def inicio():
                 let html = "";
                 todos.slice(ini, ini + POR_PAGINA).forEach((res, i) => {
                     const esPDF = res.archivo.toLowerCase().endsWith('.pdf');
-                    html += `
-                        <div class="card">
-                            <div class="meta">📄 ${esc(res.archivo)} (Pág. ${res.pagina})</div>
-                            <div class="snippet">${resaltar(res.fragmento)}</div>
-                            <div class="acciones">
-                                <button class="btn-sec" onclick="verPagina(${ini + i})">📖 Ver página completa</button>
-                                ${esPDF ? `<a class="btn-sec" href="/ver/${rutaArchivo(res.archivo)}#page=${res.pagina}" target="_blank">🔗 Abrir PDF en pág. ${res.pagina}</a>` : ""}
-                                <a class="btn-download" href="/descargar/${rutaArchivo(res.archivo)}" target="_blank">📥 Descargar Libro</a>
-                            </div>
-                        </div>`;
+                html += `
+                    <div class="card">
+                        <div class="meta">📄 ${esc(res.archivo)} (Pág. ${res.pagina})</div>
+                        <div class="snippet">${resaltar(res.fragmento)}</div>
+                        <div class="acciones">
+                            <button class="btn-sec" onclick="verPagina(${ini + i})">📖 Ver página completa</button>
+                            ${esPDF ? `<a class="btn-sec" href="/ver/${rutaArchivo(res.archivo)}#page=${res.pagina}" target="_blank">🔗 Abrir PDF en pág. ${res.pagina}</a>` : ""}
+                            <a class="btn-download" href="/descargar/${rutaArchivo(res.archivo)}" target="_blank">📥 Descargar Libro</a>
+                            <button class="btn-sec btn-peligro" data-archivo="${esc(res.archivo)}" onclick="eliminarArchivo(this.dataset.archivo)">🗑️ Eliminar</button>
+                        </div>
+                    </div>`;
                 });
                 resDiv.innerHTML = html;
 
@@ -328,6 +329,36 @@ def inicio():
 
             function cerrarVisor() {
                 document.getElementById('visor').style.display = 'none';
+            }
+            let eliminando = false;
+            async function eliminarArchivo(archivo) {
+                if (eliminando) return;  // evita dobles clics concurrentes mientras reentrena
+                if (!confirm(`¿Eliminar "${archivo}"?\n\nSe borra el archivo y se quita del índice. Esta acción no se puede deshacer.`)) return;
+                eliminando = true;
+                try {
+                    const resp = await fetch('/eliminar', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ archivo: archivo })
+                    });
+                    const r = await resp.json().catch(() => ({}));
+                    if (!resp.ok || !r.exito) {
+                        alert("No se pudo eliminar: " + (r.mensaje || `HTTP ${resp.status}`));
+                        return;
+                    }
+                    // Re-ejecutar la búsqueda actual (si había una) y refrescar colecciones.
+                    const q = document.getElementById('pregunta').value.trim();
+                    if (q) {
+                        await buscar();
+                    } else {
+                        document.getElementById('resultados').innerHTML = `<p>✅ ${esc(archivo)} eliminado.</p>`;
+                    }
+                    await cargarColecciones();
+                } catch (err) {
+                    alert("Error de conexión con el servidor.");
+                } finally {
+                    eliminando = false;
+                }
             }
 
             document.addEventListener('keydown', e => {
@@ -416,6 +447,26 @@ def _limpiar_nombre(nombre):
     nombre = (nombre or "").replace("\\", "/").split("/")[-1].strip()
     return "" if nombre in (".", "..") else nombre
 
+def _resolver_ruta_en_pdfs(archivo):
+    """Devuelve la ruta absoluta de `archivo` dentro de config.CARPETA_PDFS.
+
+    Retorna None si la ruta es inválida, vacía, absoluta, o intenta escapar
+    de CARPETA_PDFS (con '..' o resolviendo un symlink hacia afuera).
+    Acepta 'coleccion/nombre.ext' pero nunca rutas con componentes '..'.
+    """
+    if not isinstance(archivo, str):
+        return None
+    archivo = archivo.replace("\\", "/").strip()
+    if not archivo or archivo.startswith("/"):
+        return None
+    partes = [p for p in archivo.split("/") if p and p != "."]
+    if not partes or any(p == ".." for p in partes):
+        return None
+    raiz = os.path.realpath(config.CARPETA_PDFS)
+    ruta = os.path.realpath(os.path.join(raiz, *partes))
+    if ruta == raiz or not ruta.startswith(raiz + os.sep):
+        return None
+    return ruta
 
 @app.route("/subir", methods=["POST"])
 def api_subir():
@@ -457,6 +508,42 @@ def api_reentrenar():
     buscador.entrenar_modelo()
     return jsonify({"exito": True})
 
+@app.route("/eliminar", methods=["POST"])
+def api_eliminar():
+    datos = request.get_json(silent=True) or {}
+    archivo = (datos.get("archivo") or "").strip()
+    if not archivo:
+        return jsonify({"exito": False, "mensaje": "Falta el campo 'archivo'."}), 400
+
+    # 1) Validar la ruta ANTES de tocar la DB.
+    ruta = _resolver_ruta_en_pdfs(archivo)
+    if ruta is None:
+        return jsonify({"exito": False, "mensaje": "Ruta no válida."}), 400
+
+    # 2) Solo permitir borrar archivos que estén en la DB (no borrar cosas
+    #    random del filesystem). Todo-o-nada en una transacción.
+    if not database.borrar_archivo(archivo):
+        return jsonify({"exito": False, "mensaje": "El archivo no está indexado."}), 404
+
+    # 3) Borrar el archivo físico. Si ya no está, no es error: la DB es la
+    #    fuente de verdad. Si falla por permisos, igual seguimos (la DB ya
+    #    quedó limpia; el archivo queda huérfano en disco, se loguea).
+    try:
+        os.remove(ruta)
+    except FileNotFoundError:
+        pass
+    except OSError as e:
+        print("No se pudo borrar el archivo físico %s: %s" % (ruta, e))
+
+    # 4) Re-ensamblar in-memory (rápido: detecta huérfanos, limpia y no re-embebe).
+    #    Nota: sin lock (ver handoff). Peor caso: una búsqueda concurrente
+    #    devuelve un resultado de un archivo recién borrado.
+    try:
+        buscador.entrenar_modelo()
+    except Exception as e:
+        print("Fallo reentrenamiento tras eliminar '%s': %s" % (archivo, e))
+
+    return jsonify({"exito": True, "mensaje": "'%s' eliminado." % archivo})
 
 @app.route("/colecciones")
 def api_colecciones():

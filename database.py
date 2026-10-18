@@ -168,3 +168,22 @@ def borrar_embeddings_archivos(archivos):
             conn.executemany("DELETE FROM embeddings WHERE archivo = ?", [(a,) for a in archivos])
     finally:
         conn.close()
+
+def borrar_archivo(archivo):
+    """Borra las páginas y el embedding de un archivo en una sola transacción.
+
+    Devuelve True si había filas en `paginas` (es decir, si el archivo estaba
+    indexado), False si no existía. La transacción es todo-o-nada: si algo
+    falla, tanto `paginas` como `embeddings` quedan como estaban.
+    """
+    conn = obtener_conexion()
+    try:
+        with conn:
+            cur = conn.execute("SELECT COUNT(1) FROM paginas WHERE archivo = ?", (archivo,))
+            if cur.fetchone()[0] == 0:
+                return False
+            conn.execute("DELETE FROM paginas WHERE archivo = ?", (archivo,))
+            conn.execute("DELETE FROM embeddings WHERE archivo = ?", (archivo,))
+        return True
+    finally:
+        conn.close()
