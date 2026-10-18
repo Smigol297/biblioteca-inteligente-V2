@@ -59,19 +59,29 @@ jobs:
         shell: bash
         run: |
           cd fuentes-nanoe5/nanoe5-0.3.0
-          # Reemplaza self.compiler.compiler[0] por self.compiler.cc
-          sed -i 's/self\.compiler\.compiler\[0\]/self.compiler.cc/' setup.py
+          python -c "
+          import re
+          with open('setup.py', 'r') as f:
+              content = f.read()
+          # Reemplaza self.compiler.compiler[0] por self.compiler.cc (atributo de MSVC)
+          content = re.sub(r'self\.compiler\.compiler\[0\]', 'self.compiler.cc', content)
+          with open('setup.py', 'w') as f:
+              f.write(content)
+          print('setup.py parcheado.')
+          "
+          # Verificar que el cambio se aplicó
+          grep -n "self.compiler.cc" setup.py || exit 1
 
       - name: Instalar dependencias
         shell: bash
         run: |
           python -m pip install --upgrade pip
           python -m pip install "setuptools==75.8.2"
-          # Instalar nanoe5 desde la fuente parcheada (solo Windows)
           if [ "$RUNNER_OS" = "Windows" ]; then
+            # Instalar nanoe5 desde la fuente parcheada, sin aislamiento
             python -m pip install --no-build-isolation ./fuentes-nanoe5/nanoe5-0.3.0
           fi
-          # Instalar el resto de dependencias (saltando nanoe5 si ya está)
+          # Instalar el resto de dependencias (nanoe5 ya está instalado, así que se salta)
           python -m pip install -r requirements-windows.txt
 
       - name: Descargar modelo de traducción
