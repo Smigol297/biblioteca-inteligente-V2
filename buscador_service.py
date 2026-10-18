@@ -57,7 +57,7 @@ EMBED_DIM = 384
 #   64  ->  85 s / 1.50 GB   <- punto elegido
 #   128 ->  81 s / 2.14 GB   (codo: +643 MB por -4 s)
 #   256 ->  54 s / 5.80 GB
-BATCH_SIZE = 64
+from config import BATCH_SIZE
 # Identificador del modelo. Bumpear si cambia: model_file (O4→FP32), el modelo
 # base, la dimensión, o la normalización. Al bumpear, todo se re-embebe en el
 # siguiente entrenar_modelo().

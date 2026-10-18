@@ -19,7 +19,55 @@ def _modelos_dir():
         base = getattr(sys, "_MEIPASS", os.path.dirname(sys.executable))
         return os.path.join(base, "model_cache")
     return os.path.join(BASE_DIR, "model_cache")
+def _batch_size_para_ram():
+    """Elige BATCH_SIZE según RAM total. Fallback a 32 si no se puede detectar."""
+    try:
+        if sys.platform.startswith("linux"):
+            with open("/proc/meminfo") as f:
+                for linea in f:
+                    if linea.startswith("MemTotal:"):
+                        gb = int(linea.split()[1]) * 1024 / 1e9
+                        break
+                else:
+                    return 32
+        elif sys.platform == "darwin":
+            import subprocess
 
+            gb = int(subprocess.check_output(["sysctl", "-n", "hw.memsize"]).strip()) / 1e9
+        elif sys.platform == "win32":
+            import ctypes
+
+            class _MS(ctypes.Structure):
+                _fields_ = [
+                    ("dwLength", ctypes.c_ulong),
+                    ("dwMemoryLoad", ctypes.c_ulong),
+                    ("ullTotalPhys", ctypes.c_ulonglong),
+                    ("ullAvailPhys", ctypes.c_ulonglong),
+                    ("ullTotalPageFile", ctypes.c_ulonglong),
+                    ("ullAvailPageFile", ctypes.c_ulonglong),
+                    ("ullTotalVirtual", ctypes.c_ulonglong),
+                    ("ullAvailVirtual", ctypes.c_ulonglong),
+                    ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+                ]
+
+            s = _MS()
+            s.dwLength = ctypes.sizeof(s)
+            ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(s))
+            gb = s.ullTotalPhys / 1e9
+        else:
+            return 32
+    except Exception:
+        return 32  # fallback conservador
+
+    if gb < 6:
+        return 16
+    if gb < 10:
+        return 32
+    return 64
+
+
+BATCH_SIZE = _batch_size_para_ram()
+print("BATCH_SIZE elegido por RAM: %d" % BATCH_SIZE)
 
 MODELOS_DIR = _modelos_dir()
 
