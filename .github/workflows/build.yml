@@ -45,13 +45,34 @@ jobs:
         if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@v1
 
+      - name: Configurar MSYS2 (MinGW, Windows)
+        if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-make
+            mingw-w64-x86_64-openmp
+
+      - name: Configurar compilador MinGW (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          mkdir -p "$USERPROFILE/pip"
+          echo "[build]" > "$USERPROFILE/pip/distutils.cfg"
+          echo "compiler = mingw32" >> "$USERPROFILE/pip/distutils.cfg"
+          # Asegurar que el gcc de MSYS2 esté en el PATH
+          echo "C:\msys64\mingw64\bin" >> $GITHUB_PATH
+
       - name: Instalar dependencias
         shell: bash
         run: |
           python -m pip install --upgrade pip
-          export PIP_CONSTRAINT="${{ github.workspace }}/pyproject-build-constraints.txt"
-          python -m pip install -r requirements-windows.txt
-
+          python -m pip install "setuptools==75.8.2"
+          python -m pip install --no-build-isolation -r requirements-windows.txt
+          
       - name: Descargar modelo de traducción
         if: runner.os == 'Windows' || runner.os == 'macOS'
         shell: bash
