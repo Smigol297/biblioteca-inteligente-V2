@@ -1,19 +1,19 @@
 name: Compilar Biblioteca
 
 on:
-  workflow_dispatch:        # botón "Run workflow" en la pestaña Actions
+  workflow_dispatch:
   push:
-    tags: ["v*"]            # al subir una etiqueta v1.0, v1.1... también publica un Release
+    tags: ["v*"]
 
 permissions:
-  contents: write           # necesario para adjuntar archivos al Release
+  contents: write
 
 jobs:
   build:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
     strategy:
-      fail-fast: false      # si una plataforma falla, las otras siguen
+      fail-fast: false
       matrix:
         include:
           - name: windows-x64
@@ -23,7 +23,7 @@ jobs:
             os: macos-14
             python: "3.11"
           - name: macos-intel
-            os: macos-15-intel   # si GitHub cambia el nombre, ver docs de "runner images"
+            os: macos-15-intel
             python: "3.11"
 
     steps:
@@ -33,22 +33,54 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
 
+      - name: Instalar dependencias del sistema (macOS, nanoe5)
+        if: runner.os == 'macOS'
+        run: |
+          brew install libomp
+          echo "LDFLAGS=-L$(brew --prefix libomp)/lib" >> $GITHUB_ENV
+          echo "CPPFLAGS=-I$(brew --prefix libomp)/include" >> $GITHUB_ENV
+          echo "CFLAGS=-I$(brew --prefix libomp)/include" >> $GITHUB_ENV
+
       - name: Instalar dependencias
         shell: bash
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements-windows.txt
 
-      - name: Compilar
+      - name: Descargar modelo de traducción
+        if: runner.os == 'Windows' || runner.os == 'macOS'
+        shell: bash
+        run: |
+          python -c "from huggingface_hub import snapshot_download; snapshot_download('Prukario/opus-mt-es-en-ct2-int8', local_dir='modelos/opus-mt-es-en-ct2-int8')"
+
+      - name: Compilar (Windows)
+        if: runner.os == 'Windows'
         shell: bash
         run: |
           python -m PyInstaller --onedir --noconfirm --noupx --name biblioteca \
-            --collect-all fastembed \
-            --collect-all onnxruntime \
+            --collect-all nanoe5 \
+            --collect-all ctranslate2 \
+            --collect-all sentencepiece \
             --collect-submodules rank_bm25 \
             --collect-data docx \
             --exclude-module matplotlib --exclude-module tkinter \
             --collect-submodules segno \
+            --add-data "modelos/opus-mt-es-en-ct2-int8;modelos/opus-mt-es-en-ct2-int8" \
+            servidor.py
+
+      - name: Compilar (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          python -m PyInstaller --onedir --noconfirm --noupx --name biblioteca \
+            --collect-all nanoe5 \
+            --collect-all ctranslate2 \
+            --collect-all sentencepiece \
+            --collect-submodules rank_bm25 \
+            --collect-data docx \
+            --exclude-module matplotlib --exclude-module tkinter \
+            --collect-submodules segno \
+            --add-data "modelos/opus-mt-es-en-ct2-int8:modelos/opus-mt-es-en-ct2-int8" \
             servidor.py
 
       - name: Prueba de humo (arrancar, subir un texto y buscarlo)
@@ -69,6 +101,7 @@ jobs:
           curl -sf -F "file=@prueba.txt" -F "coleccion=pruebas" http://127.0.0.1:5000/subir | grep -E '"exito": ?true' || { cat salida.log; exit 1; }
           curl -sf "http://127.0.0.1:5000/buscar?q=aprendizaje&coleccion=pruebas" | grep -q "pruebas/prueba.txt" || { cat salida.log; exit 1; }
           curl -sf http://127.0.0.1:5000/qr.svg | grep -q "<svg" || { cat salida.log; exit 1; }
+          curl -sf "http://127.0.0.1:5000/buscar?q=c%C3%B3mo%20escribir%20funciones" > /dev/null || { cat salida.log; exit 1; }
           echo "Prueba de humo OK"
           kill $PID 2>/dev/null || true
           if [ "$RUNNER_OS" = "Windows" ]; then taskkill //F //IM biblioteca.exe || true; fi

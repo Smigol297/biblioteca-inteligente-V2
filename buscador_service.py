@@ -342,49 +342,54 @@ class BuscadorHibrido:
         if not self._entrenado or not query.strip():
             return []
 
-        # BM25
-        tokens = query.lower().split()
-        scores_bm25 = np.array(self.bm25.get_scores(tokens))
-        # Mascara de overlap: docs que comparten al menos un token con la consulta.
-        tokens_set = set(tokens)
-        mask_bm25 = np.array([bool(tokens_set & set(doc)) for doc in self.corpus_tokens])
+        # Búsqueda dual: si la query se traduce, buscamos con original + traducción.
+        from traductor_service import traducir_si_espanol
 
-        # nanoe5 maneja el prefijo "query:" internamente
+        query_en = traducir_si_espanol(query)
+        variantes = [query] if query_en == query else [query, query_en]
+
         if self.modelo is None:
             self.modelo = E5()
-        q_emb = np.asarray(self.modelo.query(query), dtype=np.float32)
-        q_emb = q_emb / (np.linalg.norm(q_emb) or 1.0)
-        scores_denso = self.embeddings @ q_emb
 
-        # Filtro por coleccion
-        if coleccion is not None:
-            mascara = self.colecciones == ("" if coleccion == "" else coleccion)
-            scores_bm25 = np.where(mascara, scores_bm25, -np.inf)
-            scores_denso = np.where(mascara, scores_denso, -np.inf)
-            mask_bm25 = mask_bm25 & mascara
-
-        # Rankings
-        idx_bm25 = np.argsort(-scores_bm25)
-        idx_denso = np.argsort(-scores_denso)
-
-        # RRF: entra al ranking quien tenga match lexico (mask_bm25) o semantico
-        # (coseno >= UMBRAL_DENSO_MIN).
         rrf = {}
-        for rank, idx in enumerate(idx_bm25, start=1):
-            if mask_bm25[idx]:
-                rrf[int(idx)] = rrf.get(int(idx), 0.0) + 1.0 / (RRF_K + rank)
-        for rank, idx in enumerate(idx_denso, start=1):
-            if scores_denso[idx] >= UMBRAL_DENSO_MIN:
-                rrf[int(idx)] = rrf.get(int(idx), 0.0) + 1.0 / (RRF_K + rank)
+        for q_var in variantes:
+            # BM25
+            tokens = q_var.lower().split()
+            scores_bm25 = np.array(self.bm25.get_scores(tokens))
+            tokens_set = set(tokens)
+            mask_bm25 = np.array([bool(tokens_set & set(doc)) for doc in self.corpus_tokens])
+
+            # Denso
+            q_emb = np.asarray(self.modelo.query(q_var), dtype=np.float32)
+            q_emb = q_emb / (np.linalg.norm(q_emb) or 1.0)
+            scores_denso = self.embeddings @ q_emb
+
+            # Filtro por colección
+            if coleccion is not None:
+                mascara = self.colecciones == ("" if coleccion == "" else coleccion)
+                scores_bm25 = np.where(mascara, scores_bm25, -np.inf)
+                scores_denso = np.where(mascara, scores_denso, -np.inf)
+                mask_bm25 = mask_bm25 & mascara
+
+            # RRF de esta variante
+            idx_bm25 = np.argsort(-scores_bm25)
+            idx_denso = np.argsort(-scores_denso)
+            for rank, idx in enumerate(idx_bm25, start=1):
+                if mask_bm25[idx]:
+                    rrf[int(idx)] = rrf.get(int(idx), 0.0) + 1.0 / (RRF_K + rank)
+            for rank, idx in enumerate(idx_denso, start=1):
+                if scores_denso[idx] >= UMBRAL_DENSO_MIN:
+                    rrf[int(idx)] = rrf.get(int(idx), 0.0) + 1.0 / (RRF_K + rank)
 
         if not rrf:
             return []
 
+        # Resto igual que antes
         mejor = max(rrf.values())
         _umbral_rel = UMBRAL_REL if umbral_rel is None else umbral_rel
         umbral = mejor * _umbral_rel
         candidatos = sorted(rrf.items(), key=lambda kv: -kv[1])
-        terminos = self._terminos_resaltables(query)
+        terminos = self._terminos_resaltables(query_en)  # resaltar la traducción
 
         resultados = []
         vistos = set()

@@ -45,6 +45,8 @@ jobs:
           cache-dependency-path: |
             requirements-windows.txt
             requirements-dev.txt
+      - name: Instalar dependencias del sistema (nanoe5)
+        run: sudo apt-get update && sudo apt-get install -y libgomp1 build-essential
       - run: pip install -r requirements-windows.txt -r requirements-dev.txt
       - run: pytest tests/unit
 
@@ -65,5 +67,7 @@ jobs:
           cache-dependency-path: |
             requirements-windows.txt
             requirements-dev.txt
+      - name: Instalar dependencias del sistema (nanoe5)
+        run: sudo apt-get update && sudo apt-get install -y libgomp1 build-essential
       - run: pip install -r requirements-windows.txt -r requirements-dev.txt
       - run: pytest tests/integration
