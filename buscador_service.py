@@ -12,6 +12,8 @@ import numpy as np
 from nanoe5 import E5
 from rank_bm25 import BM25Okapi
 
+import config
+import database
 from config import BATCH_SIZE
 
 # --- Registro manual de e5-small (no está en el catálogo de esta versión) ---
@@ -19,8 +21,6 @@ from config import BATCH_SIZE
 # explícitamente para que TextEmbedding lo reconozca.
 # Ver: https://github.com/qdrant/fastembed/issues/123
 
-import config
-import database
 
 # ---------------------------------------------------------------------------
 # Constantes
@@ -240,15 +240,14 @@ class BuscadorHibrido:
             emb = np.empty((n, EMBED_DIM), dtype=np.float32)
             for i in range(0, n, BATCH_SIZE):
                 trozo = textos[i : i + BATCH_SIZE]
-                emb[i : i + len(trozo)] = np.asarray(
-                    self.modelo.passage(trozo), dtype=np.float32
-                )
+                emb[i : i + len(trozo)] = np.asarray(self.modelo.passage(trozo), dtype=np.float32)
                 for _ in trozo:
                     hechos += 1
                     if progreso is not None:
                         progreso(hechos, total_pags)
-            assert emb.shape == (n, EMBED_DIM), (
-                "shape inesperado: %s (esperaba %s)" % (emb.shape, (n, EMBED_DIM))
+            assert emb.shape == (n, EMBED_DIM), "shape inesperado: %s (esperaba %s)" % (
+                emb.shape,
+                (n, EMBED_DIM),
             )
             normas = np.linalg.norm(emb, axis=1, keepdims=True)
             normas[normas == 0] = 1.0
@@ -314,54 +313,6 @@ class BuscadorHibrido:
         except OSError:
             pass
         print("embeddings.npy migrado a SQLite (%d archivos)." % len(a_persistir))
-        filas = database.obtener_todas_las_paginas()
-        if not filas:
-            self._entrenado = False
-            return False
-
-        self.paginas = [(f[1], f[2], f[3]) for f in filas]
-        self.colecciones = np.array([_coleccion_de(a) for a, _, _ in self.paginas])
-
-        # BM25: tokenizacion simple. Guardamos el corpus tokenizado nosotros
-        # porque BM25Okapi no lo expone como atributo publico.
-        self.corpus_tokens = [t.lower().split() for _, _, t in self.paginas]
-        self.bm25 = BM25Okapi(self.corpus_tokens)
-
-        # El modelo se carga siempre: buscar() lo necesita para embeber la
-        # consulta, aunque los embeddings del corpus se reusen del .npy.
-        if self.modelo is None:
-            self.modelo = E5()
-
-        # Embeddings: reusar si el corpus no cambio
-        ruta_emb = os.path.join(config.BASE_DIR, "embeddings.npy")
-        hash_actual = self._hash_corpus()
-        if os.path.exists(ruta_emb):
-            try:
-                datos = np.load(ruta_emb, allow_pickle=True).item()
-                if datos.get("hash") == hash_actual and datos["emb"].shape[0] == len(self.paginas):
-                    self.embeddings = datos["emb"]
-                    self._entrenado = True
-                    return True
-            except Exception:
-                pass
-
-        # e5 requiere "passage: " para los documentos
-        textos = [PREFIJO_PASSAGE + t for _, _, t in self.paginas]
-        n = len(textos)
-        # Prealocamos float32 y copiamos cada vector: evita materializar la
-        # lista intermedia de ndarrays y mantiene el dtype de punta a punta.
-        self.embeddings = np.empty((n, EMBED_DIM), dtype=np.float32)
-        for i, vec in enumerate(self.modelo.embed(textos, batch_size=BATCH_SIZE)):
-            self.embeddings[i] = vec
-
-        assert i == n - 1, "fastembed devolvio %d vectores, esperaba %d" % (i + 1, n)
-        # Normalizar in-place: mismo resultado, sin array temporal nuevo.
-        normas = np.linalg.norm(self.embeddings, axis=1, keepdims=True)
-        normas[normas == 0] = 1.0
-        self.embeddings /= normas
-        np.save(ruta_emb, {"hash": hash_actual, "emb": self.embeddings})
-        self._entrenado = True
-        return True
 
     def _hash_archivo(self, archivo, items):
         """Hash de un archivo: nombre + (pagina, texto) en orden. Renombrar

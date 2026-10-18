@@ -121,11 +121,16 @@ def test_rrf_fusiona_bm25_y_denso(crear_buscador, monkeypatch):
 
     class _Semantico:
         DIM = 384
-        def __init__(self, *a, **kw): pass
+
+        def __init__(self, *a, **kw):
+            pass
+
         def passage(self, textos):
             return np.array([self._vec(t) for t in textos], dtype=np.float32)
+
         def query(self, texto):
             return self._vec(texto)
+
         def _vec(self, t):
             v = np.zeros(self.DIM, dtype=np.float32)
             if "semantico" in t.lower():
@@ -254,6 +259,7 @@ def test_ensamblado_respeta_orden_de_paginas(crear_buscador):
     # ser el vector de paginas[i]. Recalculamos con el fake y comparamos.
     import numpy as np
     from conftest import _FakeE5
+
     fake = _FakeE5()
     for i, (_, _, texto) in enumerate(b.paginas):
         esperado = fake.passage([texto])[0]
