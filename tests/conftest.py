@@ -166,3 +166,14 @@ def crear_pdf():
         return ruta
 
     return _crear
+    
+@pytest.fixture(autouse=True)
+def sin_traductor(monkeypatch):
+    """Evita cargar CTranslate2 en tests. El traductor devuelve la query
+    sin cambios, así los tests de retrieval funcionan sin red ni modelo."""
+    import sys
+    import types
+
+    fake = types.ModuleType("traductor_service")
+    fake.traducir_si_espanol = lambda q: q
+    monkeypatch.setitem(sys.modules, "traductor_service", fake)

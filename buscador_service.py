@@ -338,14 +338,23 @@ class BuscadorHibrido:
 
     # -- busqueda -----------------------------------------------------------
 
-    def buscar(self, query, top_k=100, agrupar=False, coleccion=None, umbral_rel=None):
+    def buscar(self, query, top_k=100, agrupar=False, coleccion=None,
+               umbral_rel=None, traducir=True):
+        
         if not self._entrenado or not query.strip():
             return []
+        # Traducción: solo si traducir=True. Fallback a la original si falla.
+        query_en = query
+        if traducir:
+            try:
+                from traductor_service import traducir_si_espanol
+                query_en = traducir_si_espanol(query)
+            except Exception:
+                query_en = query  # fallback: traductor no disponible
 
-        # Búsqueda dual: si la query se traduce, buscamos con original + traducción.
-        from traductor_service import traducir_si_espanol
+        # Búsqueda dual: original + traducción (si hubo traducción).
+        variantes = [query] if query_en == query else [query, query_en]
 
-        query_en = traducir_si_espanol(query)
         variantes = [query] if query_en == query else [query, query_en]
 
         if self.modelo is None:
@@ -389,8 +398,9 @@ class BuscadorHibrido:
         _umbral_rel = UMBRAL_REL if umbral_rel is None else umbral_rel
         umbral = mejor * _umbral_rel
         candidatos = sorted(rrf.items(), key=lambda kv: -kv[1])
-        terminos = self._terminos_resaltables(query_en)  # resaltar la traducción
-
+        terminos = self._terminos_resaltables(query_en)
+        if query_en != query:
+            terminos = terminos | self._terminos_resaltables(query)
         resultados = []
         vistos = set()
         for idx, score in candidatos:
