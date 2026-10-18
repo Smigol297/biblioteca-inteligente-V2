@@ -2,6 +2,7 @@
 """Tests del BuscadorHibrido (BM25 + e5-small + RRF)."""
 import database
 from buscador_service import MODELO_ID, BuscadorHibrido
+
 LIBROS = {
     "biologia.txt": [
         "La fotosintesis convierte la luz solar en energia quimica dentro de las plantas",
@@ -175,6 +176,7 @@ def test_prefijos_query_y_passage(crear_buscador, fake_embedding):
     buscador.buscar("fotosintesis")
     assert fake_embedding.textos_recibidos == ["query: fotosintesis"]
 
+
 # ---------- indexado incremental ----------
 
 
@@ -184,6 +186,7 @@ def test_incremental_no_reembebe_lo_que_no_cambio(crear_buscador, fake_embedding
     fake_embedding.textos_recibidos = []
 
     from buscador_service import BuscadorHibrido as B
+
     b2 = B()
     assert b2.entrenar_modelo() is True
     assert fake_embedding.textos_recibidos == []
@@ -195,6 +198,7 @@ def test_incremental_solo_embebe_el_archivo_nuevo(crear_buscador, fake_embedding
     fake_embedding.textos_recibidos = []
 
     from buscador_service import BuscadorHibrido as B
+
     b = B()
     b.entrenar_modelo()
     assert fake_embedding.textos_recibidos == ["passage: contenido flamante"]
@@ -206,6 +210,7 @@ def test_incremental_reembebe_archivo_modificado(crear_buscador, fake_embedding)
     fake_embedding.textos_recibidos = []
 
     from buscador_service import BuscadorHibrido as B
+
     b = B()
     b.entrenar_modelo()
     assert fake_embedding.textos_recibidos == ["passage: texto cambiado de biologia"]
@@ -217,6 +222,7 @@ def test_incremental_borra_huerfanos_sin_embeber(crear_buscador, fake_embedding)
     fake_embedding.textos_recibidos = []
 
     from buscador_service import BuscadorHibrido as B
+
     b = B()
     b.entrenar_modelo()
     assert fake_embedding.textos_recibidos == []
@@ -233,6 +239,7 @@ def test_modelo_id_bumpeado_fuerza_reindexado(crear_buscador, fake_embedding, mo
     fake_embedding.textos_recibidos = []
 
     from buscador_service import BuscadorHibrido as B
+
     b = B()
     b.entrenar_modelo()
     # Se re-embeben todas las páginas con el modelo "nuevo".
@@ -241,9 +248,7 @@ def test_modelo_id_bumpeado_fuerza_reindexado(crear_buscador, fake_embedding, mo
 
 def test_busqueda_anda_despues_de_incremental(crear_buscador):
     b = crear_buscador(LIBROS)
-    database.reemplazar_archivo(
-        "nuevo.txt", [(1, "revolucion industrial vapor carbon hierro")]
-    )
+    database.reemplazar_archivo("nuevo.txt", [(1, "revolucion industrial vapor carbon hierro")])
     b.entrenar_modelo()
 
     assert b.buscar("fotosintesis")[0]["archivo"] == "biologia.txt"
@@ -256,7 +261,6 @@ def test_ensamblado_respeta_orden_de_paginas(crear_buscador):
     # Verificar contra b.paginas: para cada i, embeddings[i] tiene que
     # ser el vector de paginas[i]. Recalculamos con el fake y comparamos.
     import numpy as np
-
     from conftest import _FakeEmbedding
 
     fake = _FakeEmbedding()

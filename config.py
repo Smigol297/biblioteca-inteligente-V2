@@ -19,6 +19,8 @@ def _modelos_dir():
         base = getattr(sys, "_MEIPASS", os.path.dirname(sys.executable))
         return os.path.join(base, "model_cache")
     return os.path.join(BASE_DIR, "model_cache")
+
+
 def _batch_size_para_ram():
     """Elige BATCH_SIZE según RAM total. Fallback a 32 si no se puede detectar."""
     try:

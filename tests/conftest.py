@@ -10,6 +10,7 @@ import database
 # Aislamiento: base SQLite y carpeta mis_pdfs temporales por test.
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def entorno(tmp_path, monkeypatch):
     """Carpeta mis_pdfs/ y base SQLite temporales, aisladas por test.
@@ -175,4 +176,3 @@ def crear_pdf():
         return ruta
 
     return _crear
-

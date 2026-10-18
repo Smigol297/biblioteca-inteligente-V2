@@ -39,9 +39,7 @@ def inicializar_db():
             )
         """
         )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_emb_modelo ON embeddings(modelo_id)"
-        )
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_emb_modelo ON embeddings(modelo_id)")
         conn.commit()
 
 
@@ -112,6 +110,7 @@ def obtener_pagina(archivo, pagina):
     finally:
         conn.close()
 
+
 # ---------------------------------------------------------------------------
 # Embeddings por archivo (indexado incremental)
 # ---------------------------------------------------------------------------
@@ -166,8 +165,6 @@ def borrar_embeddings_archivos(archivos):
     conn = obtener_conexion()
     try:
         with conn:
-            conn.executemany(
-                "DELETE FROM embeddings WHERE archivo = ?", [(a,) for a in archivos]
-            )
+            conn.executemany("DELETE FROM embeddings WHERE archivo = ?", [(a,) for a in archivos])
     finally:
         conn.close()

@@ -13,6 +13,8 @@ from fastembed import TextEmbedding
 from fastembed.common.model_description import ModelSource, PoolingType
 from rank_bm25 import BM25Okapi
 
+from config import BATCH_SIZE
+
 # --- Registro manual de e5-small (no está en el catálogo de esta versión) ---
 # fastembed 0.9.0 solo incluye multilingual-e5-large. Registramos el small
 # explícitamente para que TextEmbedding lo reconozca.
@@ -57,7 +59,8 @@ EMBED_DIM = 384
 #   64  ->  85 s / 1.50 GB   <- punto elegido
 #   128 ->  81 s / 2.14 GB   (codo: +643 MB por -4 s)
 #   256 ->  54 s / 5.80 GB
-from config import BATCH_SIZE
+
+
 # Identificador del modelo. Bumpear si cambia: model_file (O4→FP32), el modelo
 # base, la dimensión, o la normalización. Al bumpear, todo se re-embebe en el
 # siguiente entrenar_modelo().
@@ -238,8 +241,9 @@ class BuscadorHibrido:
             chunk = reusar[archivo]
             embeddings[idx : idx + len(chunk)] = chunk
             idx += len(chunk)
-        assert idx == len(self.paginas), (
-            "ensamblado inconsistente: %d filas vs %d paginas" % (idx, len(self.paginas))
+        assert idx == len(self.paginas), "ensamblado inconsistente: %d filas vs %d paginas" % (
+            idx,
+            len(self.paginas),
         )
         self.embeddings = embeddings
 
@@ -306,8 +310,7 @@ class BuscadorHibrido:
             return
         if emb.shape[1] != EMBED_DIM:
             print(
-                "embeddings.npy tiene dim %d, esperaba %d; se reindexa."
-                % (emb.shape[1], EMBED_DIM)
+                "embeddings.npy tiene dim %d, esperaba %d; se reindexa." % (emb.shape[1], EMBED_DIM)
             )
             return
 
@@ -390,7 +393,7 @@ class BuscadorHibrido:
         self._entrenado = True
         return True
 
-    def _hash_archivo(self,archivo, items):
+    def _hash_archivo(self, archivo, items):
         """Hash de un archivo: nombre + (pagina, texto) en orden. Renombrar
         invalida, y también cualquier cambio de texto o numeración de páginas."""
         h = hashlib.md5()
@@ -402,8 +405,7 @@ class BuscadorHibrido:
             h.update(t.encode("utf-8", errors="replace"))
         return h.hexdigest()
 
-
-    def _agrupar_por_archivo(self,filas):
+    def _agrupar_por_archivo(self, filas):
         """filas = [(id, archivo, pagina, texto)] en orden de id.
 
         Devuelve dict {archivo: [(pagina, texto), ...]} en orden de primera
