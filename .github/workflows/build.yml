@@ -45,44 +45,32 @@ jobs:
         if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@v1
 
+      - name: Configurar MSYS2 (MinGW, Windows)
+        if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-make
+            mingw-w64-x86_64-openmp
 
-      - name: Descargar fuente de nanoe5 (Windows)
+      - name: Configurar compilador MinGW (Windows)
         if: runner.os == 'Windows'
         shell: bash
         run: |
-          python -m pip download nanoe5==0.3.0 --no-binary :all: --no-deps -d fuentes-nanoe5
-          cd fuentes-nanoe5
-          tar -xzf nanoe5-0.3.0.tar.gz
-
-      - name: Parchear setup.py de nanoe5 (Windows)
-        if: runner.os == 'Windows'
-        shell: bash
-        run: |
-          cd fuentes-nanoe5/nanoe5-0.3.0
-          python -c "
-          import re
-          with open('setup.py', 'r') as f:
-              content = f.read()
-          # Reemplaza self.compiler.compiler[0] por self.compiler.cc (atributo de MSVC)
-          content = re.sub(r'self\.compiler\.compiler\[0\]', 'self.compiler.cc', content)
-          with open('setup.py', 'w') as f:
-              f.write(content)
-          print('setup.py parcheado.')
-          "
-          # Verificar que el cambio se aplicó
-          grep -n "self.compiler.cc" setup.py || exit 1
+          echo "[build]" > "$USERPROFILE/pydistutils.cfg"
+          echo "compiler = mingw32" >> "$USERPROFILE/pydistutils.cfg"
+          echo "C:/msys64/mingw64/bin" >> $GITHUB_PATH
+          echo "CC=gcc" >> $GITHUB_ENV
 
       - name: Instalar dependencias
         shell: bash
         run: |
           python -m pip install --upgrade pip
           python -m pip install "setuptools==75.8.2"
-          if [ "$RUNNER_OS" = "Windows" ]; then
-            # Instalar nanoe5 desde la fuente parcheada, sin aislamiento
-            python -m pip install --no-build-isolation ./fuentes-nanoe5/nanoe5-0.3.0
-          fi
-          # Instalar el resto de dependencias (nanoe5 ya está instalado, así que se salta)
-          python -m pip install -r requirements-windows.txt
+          python -m pip install -r requirements-windows.txt   # ← solo esta línea
 
       - name: Descargar modelo de traducción
         if: runner.os == 'Windows' || runner.os == 'macOS'
