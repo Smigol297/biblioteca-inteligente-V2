@@ -94,6 +94,17 @@ jobs:
             --add-data "modelos/opus-mt-es-en-ct2-int8:modelos/opus-mt-es-en-ct2-int8" \
             servidor.py
 
+      - name: Firmar ad-hoc los binarios (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          # Firmar los .dylib y .so internos primero (dependencias)
+          find dist/biblioteca -type f \( -name "*.dylib" -o -name "*.so" \) \
+            -exec codesign --force --sign - {} \;
+          # Firmar el ejecutable principal
+          codesign --force --sign - dist/biblioteca/biblioteca
+          # Verificar
+          codesign --verify --verbose dist/biblioteca/biblioteca
+
       - name: Prueba de humo (arrancar, subir un texto y buscarlo)
         shell: bash
         run: |

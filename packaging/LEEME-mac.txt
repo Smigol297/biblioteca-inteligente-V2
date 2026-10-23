@@ -14,3 +14,165 @@ Si macOS sigue bloqueándolo: Ajustes del Sistema > Privacidad y seguridad > "Ab
 
 Tus libros y la base de datos se guardan dentro de la carpeta "biblioteca".
 Si actualizás a una versión nueva, copiá encima sin borrar "mis_pdfs" ni "biblioteca.db".
+
+═══════════════════════════════════════════════════════════════════
+  Biblioteca Inteligente — Instrucciones para macOS
+═══════════════════════════════════════════════════════════════════
+
+Esta es una aplicación para buscar dentro de tus propios libros (PDF,
+DOCX, TXT, MD) sin enviar nada a internet. Corre 100% en tu Mac.
+
+─── 1. Descomprimir ──────────────────────────────────────────────
+
+  Hacé doble clic en el archivo "Biblioteca-macos-apple-silicon.zip"
+  (o "Biblioteca-macos-intel.zip" si tenés una Mac Intel).
+
+  Se va a crear una carpeta llamada "Biblioteca" en tu carpeta de
+  Descargas. Adentro vas a ver:
+     - Iniciar.command      ← el que abrís
+     - LEEME-mac.txt        ← este archivo
+     - biblioteca/          ← el motor de búsqueda
+
+─── 2. Abrir la aplicación por primera vez ───────────────────────
+
+  ⚠️  IMPORTANTE: NO hagas doble clic directo la primera vez. macOS
+  va a bloquear la app porque no tiene una firma de pago de Apple
+  (las firmas cuestan 99 USD al año, y este proyecto es gratuito).
+
+  Pasos:
+
+  1. Hacé CLIC DERECHO (o Control + clic) sobre "Iniciar.command".
+  2. En el menú que aparece, elegí "Abrir".
+  3. macOS te va a preguntar de nuevo si querés abrirlo. Hacé clic
+     en "Abrir" otra vez.
+
+  Listo. La primera vez son 3 clics. Las próximas veces alcanza con
+  hacer doble clic normal sobre "Iniciar.command".
+
+  Si no aparece la opción "Abrir" en el menú del clic derecho:
+
+  → Abrí "Ajustes del Sistema" → "Privacidad y Seguridad".
+  → Bajá hasta la sección "Seguridad".
+  → Vas a ver un mensaje que dice que se bloqueó "Iniciar.command"
+    o "biblioteca". Hacé clic en "Abrir de todos modos".
+  → Te va a pedir tu contraseña de usuario de la Mac. Escribila.
+
+  Este botón "Abrir de todos modos" solo aparece durante una hora
+  después del primer intento de apertura. Si ya pasó ese tiempo,
+  volvé a hacer clic derecho → Abrir sobre "Iniciar.command", y el
+  botón aparece de nuevo.
+
+─── 3. Qué va a pasar cuando lo abras ───────────────────────────
+
+  Se va a abrir una ventana de Terminal (fondo negro con texto). Es
+  normal, no la cierres.
+
+  En esa ventana vas a ver algo como:
+
+     Biblioteca lista en http://192.168.0.25:5000
+     (cerrá esta ventana para apagarla)
+
+  Y se va a abrir automáticamente el navegador (Safari, Chrome,
+  Firefox, el que uses por defecto) con la interfaz de la biblioteca.
+
+  ⚠️  NO CIERRES la ventana de Terminal mientras estés usando la
+  biblioteca. Es el "motor" de la app. Si la cerrás, se apaga.
+
+─── 4. Usarla desde el celular (opcional) ────────────────────────
+
+  Si tu Mac y tu celular están en la misma red Wi-Fi, podés abrir la
+  biblioteca desde el celular.
+
+  En la página de la biblioteca, bajá hasta el panel "Acceso desde el
+  celular". Vas a ver un código QR y una URL.
+
+  Escaneá el QR con la cámara del celular, o escribí la URL en el
+  navegador del celular.
+
+─── 5. Apagar la aplicación ─────────────────────────────────────
+
+  Cuando termines de usar la biblioteca:
+
+  → En el navegador, hacé clic en el botón "⏻ Apagar servidor" (está
+    en la parte de abajo de la página).
+  → O simplemente cerrá la ventana de Terminal.
+
+  Ninguna de las dos formas va a borrar tus datos. Los libros
+  indexados, las colecciones y los embeddings quedan guardados. La
+  próxima vez que abras la app, todo sigue ahí.
+
+─── 6. Si algo no funciona ───────────────────────────────────────
+
+  ❌ "La app está dañada y debe moverse a la papelera"
+
+     Esto pasa porque macOS pone un atributo de "cuarentena" en los
+     archivos que vienen de internet. La app NO está dañada.
+
+     Solución (requiere usar Terminal una sola vez):
+
+     1. Abrí "Terminal" (buscá "Terminal" en Spotlight).
+     2. Escribí este comando, pero no lo ejecutes todavía:
+           xattr -cr
+     3. Arrastrá el archivo "Iniciar.command" desde el Finder a la
+        ventana de Terminal. Se va a pegar la ruta automáticamente.
+        El comando va a quedar así:
+           xattr -cr /Users/tu-usuario/Downloads/Biblioteca/Iniciar.command
+     4. Presioná Enter. No vas a ver ningún mensaje (es normal).
+     5. Ahora sí, doble clic sobre "Iniciar.command".
+
+  ❌ "Iniciar.command no se puede abrir porque el desarrollador no
+     puede ser verificado"
+
+     Es lo mismo que el punto anterior. Solución:
+     → Clic derecho sobre "Iniciar.command" → "Abrir" → "Abrir".
+
+  ❌ La ventana de Terminal se abre y se cierra sola
+
+     Suele pasar cuando macOS no tiene permisos para ejecutar el
+     script. Solución:
+     → Abrí "Terminal", escribí:
+           chmod +x
+     → Arrastrá "Iniciar.command" a la Terminal (queda:
+           chmod +x /Users/tu-usuario/Downloads/Biblioteca/Iniciar.command)
+     → Presioná Enter.
+     → Volvé a hacer doble clic sobre "Iniciar.command".
+
+  ❌ La página de la biblioteca no abre en el navegador
+
+     Mirá la ventana de Terminal. Si ves un mensaje rojo o un error
+     de Python, copialo y mandalo. Sin ese texto no puedo ayudarte.
+
+  ❌ "No se puede conectar al servidor"
+
+     Cerrá el navegador, cerrá la ventana de Terminal, volvé a hacer
+     doble clic en "Iniciar.command", y esperá 10 segundos antes de
+     abrir el navegador.
+
+─── 7. Sobre la privacidad ───────────────────────────────────────
+
+  Todo corre en tu Mac. Nada se envía a internet. La app no pide
+  cuenta, no tiene telemetría, y no se conecta a ningún servidor
+  externo mientras la usás.
+
+  La única conexión a internet es:
+     - La primera vez que abrís un libro nuevo, si la app necesita
+       descargar el modelo de embeddings o de traducción.
+     - Si subís un libro y querés traducir consultas, la traducción
+       es local (corre en tu Mac, no en la nube).
+
+─── 8. Requisitos ───────────────────────────────────────────────
+
+  - macOS 12 (Monterey) o posterior.
+  - Para Macs con chip Apple Silicon (M1, M2, M3, M4), usá el zip
+    "apple-silicon".
+  - Para Macs con chip Intel, usá el zip "intel".
+  - ~500 MB de espacio libre en disco (modelos incluidos).
+  - 2 GB de RAM como mínimo, 4 GB recomendado.
+
+─── ¿Dudas? ─────────────────────────────────────────────────────
+
+  Si algo no anda, mandame el texto completo de la ventana de
+  Terminal. Ese texto tiene toda la información para diagnosticar.
+
+  ¡Gracias por usar la Biblioteca Inteligente!
+═══════════════════════════════════════════════════════════════════
